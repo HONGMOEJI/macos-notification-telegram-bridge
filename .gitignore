@@ -1,0 +1,21 @@
+# Local secrets
+config.env
+*.local.env
+.env
+
+# Runtime state
+state.json
+*.state.json
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
