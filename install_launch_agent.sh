@@ -39,9 +39,9 @@ cat > "$PLIST_PATH" <<PLIST
   <array>
     <string>$PYTHON_BIN</string>
     <string>$APP_DIR/messages_to_telegram.py</string>
-    <string>run</string>
     <string>--config</string>
     <string>$CONFIG_PATH</string>
+    <string>run</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
