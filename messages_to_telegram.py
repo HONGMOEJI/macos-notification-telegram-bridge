@@ -772,9 +772,6 @@ def format_notification(config: Config, notification: NotificationRow) -> str:
     if body:
         lines.extend(["", body])
 
-    if parsed.get("category"):
-        lines.append(f"\nCategory: {parsed['category']}")
-
     return trim_telegram_text("\n".join(lines))
 
 
