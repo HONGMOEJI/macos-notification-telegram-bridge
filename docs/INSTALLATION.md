@@ -122,8 +122,8 @@ Grant Full Disk Access to the runner:
 
 - Terminal, iTerm, or the terminal app used for manual runs
 - 수동 실행에 쓰는 Terminal, iTerm 등
-- The Python executable used by LaunchAgent, depending on macOS version
-- macOS 버전에 따라 LaunchAgent가 사용하는 Python 실행 파일
+- The Python executable printed by `./install_launch_agent.sh`
+- `./install_launch_agent.sh`가 출력하는 Python 실행 파일
 
 Settings path:
 
@@ -131,6 +131,14 @@ Settings path:
 
 ```text
 System Settings -> Privacy & Security -> Full Disk Access
+```
+
+You can print the Python path manually:
+
+Python 경로를 직접 확인:
+
+```bash
+python3 -c 'import sys; print(sys.executable)'
 ```
 
 ## 7. Logs / 로그

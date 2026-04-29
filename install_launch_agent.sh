@@ -8,6 +8,12 @@ CONFIG_PATH="$APP_DIR/config.env"
 PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="$(command -v python3 || true)"
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "python3 was not found on PATH." >&2
+  exit 1
+fi
 
 mkdir -p "$APP_DIR" "$HOME/Library/LaunchAgents" "$LOG_DIR"
 cp "$SOURCE_DIR/messages_to_telegram.py" "$APP_DIR/messages_to_telegram.py"
@@ -31,8 +37,7 @@ cat > "$PLIST_PATH" <<PLIST
   <string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/env</string>
-    <string>python3</string>
+    <string>$PYTHON_BIN</string>
     <string>$APP_DIR/messages_to_telegram.py</string>
     <string>run</string>
     <string>--config</string>
@@ -59,6 +64,8 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
 echo "Installed and started $LABEL"
+echo "Python executable:"
+echo "  $PYTHON_BIN"
 echo "Logs:"
 echo "  $LOG_DIR/$APP_NAME.out.log"
 echo "  $LOG_DIR/$APP_NAME.err.log"
