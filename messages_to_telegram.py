@@ -791,6 +791,16 @@ def telegram_api_url(config: Config, method: str) -> str:
 
 
 def telegram_request(config: Config, method: str, payload: dict[str, Any] | None = None) -> Any:
+    try:
+        return telegram_request_urllib(config, method, payload)
+    except RuntimeError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+            raise
+        logging.warning("Python TLS verification failed; retrying Telegram request with curl")
+        return telegram_request_curl(config, method, payload)
+
+
+def telegram_request_urllib(config: Config, method: str, payload: dict[str, Any] | None = None) -> Any:
     payload = payload or {}
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -813,6 +823,53 @@ def telegram_request(config: Config, method: str, payload: dict[str, Any] | None
         description = parsed.get("description", "unknown Telegram API error")
         raise RuntimeError(f"Telegram API error: {description}")
     return parsed.get("result")
+
+
+def telegram_request_curl(config: Config, method: str, payload: dict[str, Any] | None = None) -> Any:
+    curl_path = "/usr/bin/curl"
+    if not Path(curl_path).exists():
+        raise RuntimeError("Python TLS verification failed and /usr/bin/curl is not available")
+
+    payload = payload or {}
+    data = json.dumps(payload, ensure_ascii=False)
+    curl_config = "\n".join(
+        [
+            f'url = "{curl_escape(telegram_api_url(config, method))}"',
+            'request = "POST"',
+            'header = "Content-Type: application/json"',
+            f'data = "{curl_escape(data)}"',
+            "silent",
+            "show-error",
+            'write-out = "\\n%{http_code}"',
+            "",
+        ]
+    )
+    proc = subprocess.run(
+        [curl_path, "--config", "-"],
+        input=curl_config,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Telegram curl request failed: {proc.stderr.strip()}")
+
+    raw_body, _, status_code = proc.stdout.rpartition("\n")
+    if not status_code.isdigit():
+        raise RuntimeError(f"Telegram curl response missing HTTP status: {proc.stdout}")
+    if int(status_code) >= 400:
+        raise RuntimeError(f"Telegram HTTP {status_code}: {raw_body}")
+
+    parsed = json.loads(raw_body)
+    if not parsed.get("ok"):
+        description = parsed.get("description", "unknown Telegram API error")
+        raise RuntimeError(f"Telegram API error: {description}")
+    return parsed.get("result")
+
+
+def curl_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def send_telegram_message(config: Config, text: str) -> None:
