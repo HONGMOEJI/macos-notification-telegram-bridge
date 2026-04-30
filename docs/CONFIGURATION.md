@@ -107,6 +107,20 @@ Default:
 ~/Library/Application Support/messages-to-telegram/state.json
 ```
 
+### `APP_MAP_PATH`
+
+Default:
+
+기본값:
+
+```text
+~/Library/Application Support/messages-to-telegram/app_map.json
+```
+
+Editable JSON map from bundle ID to display name.
+
+번들 ID를 표시 이름으로 바꾸는 사용자가 수정 가능한 JSON 매핑 파일입니다.
+
 ## Polling / 폴링
 
 ### `POLL_INTERVAL_SECONDS`

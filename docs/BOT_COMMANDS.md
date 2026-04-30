@@ -80,6 +80,62 @@ Telegram bundle IDs are denied by default to avoid forwarding loops.
 
 Telegram 알림 재귀 루프를 막기 위해 Telegram 번들 ID는 기본 제외됩니다.
 
+## Notification Tables / 알림 표
+
+```text
+/notilist
+/notilist all 20
+/notilist com.kakao.kakaotalkmac 10
+/notilist KakaoTalk 10
+```
+
+Show recent Notification Center records as a compact table. You can filter by bundle ID or mapped app name.
+
+최근 Notification Center 항목을 간단한 표로 보여줍니다. 번들 ID 또는 매핑된 앱 이름으로 필터링할 수 있습니다.
+
+```text
+/apps
+/apps 50
+```
+
+Show recently seen notification apps with bundle IDs, counts, and last seen time.
+
+알림이 관측된 앱 목록, 번들 ID, 개수, 최근 시간을 표로 보여줍니다.
+
+## App Name Mapping / 앱 이름 매핑
+
+```text
+/map
+/map path
+/map set com.kakao.kakaotalkmac KakaoTalk
+/map unset com.kakao.kakaotalkmac
+/unmap com.kakao.kakaotalkmac
+```
+
+Manage the editable bundle-ID-to-display-name table. The map is stored as JSON and can also be edited manually.
+
+번들 ID를 사람이 읽기 쉬운 이름으로 바꾸는 매핑 테이블을 관리합니다. 매핑은 JSON 파일로 저장되어 직접 수정할 수도 있습니다.
+
+Default path:
+
+기본 경로:
+
+```text
+~/Library/Application Support/messages-to-telegram/app_map.json
+```
+
+Example:
+
+예시:
+
+```json
+{
+  "com.kakao.kakaotalkmac": "KakaoTalk",
+  "com.google.chrome": "Chrome",
+  "com.apple.mobilesms": "Messages"
+}
+```
+
 ## News / 뉴스
 
 ```text

@@ -150,6 +150,10 @@ Telegram 봇 명령은 설정된 `TELEGRAM_CHAT_ID`에서 기본 활성화됩니
 /notimode full|redacted|app_only
 /deny com.example.App
 /denylist
+/notilist all 15
+/notilist KakaoTalk 10
+/apps 30
+/map set com.kakao.kakaotalkmac KakaoTalk
 /news AI 5
 /stock AAPL 005930.KS
 /brief
@@ -247,6 +251,7 @@ Threat model and permissions: [docs/SECURITY.md](docs/SECURITY.md)
 - [Security / 보안](docs/SECURITY.md)
 - [Troubleshooting / 문제 해결](docs/TROUBLESHOOTING.md)
 - [Bot Commands / 봇 명령어](docs/BOT_COMMANDS.md)
+- [App Map Example / 앱 매핑 예시](app_map.example.json)
 
 ## License / 라이선스
 

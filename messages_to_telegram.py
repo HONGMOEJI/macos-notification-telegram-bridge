@@ -34,6 +34,7 @@ APP_NAME = "messages-to-telegram"
 DEFAULT_APP_DIR = Path.home() / "Library" / "Application Support" / APP_NAME
 DEFAULT_CONFIG_PATH = DEFAULT_APP_DIR / "config.env"
 DEFAULT_STATE_PATH = DEFAULT_APP_DIR / "state.json"
+DEFAULT_APP_MAP_PATH = DEFAULT_APP_DIR / "app_map.json"
 DEFAULT_MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
 DEFAULT_NOTIFICATION_DB = (
     Path.home() / "Library" / "Group Containers" / "group.com.apple.usernoted" / "db2" / "db"
@@ -54,6 +55,7 @@ ENV_KEYS = {
     "TELEGRAM_CHAT_ID",
     "MESSAGES_DB_PATH",
     "NOTIFICATION_DB_PATH",
+    "APP_MAP_PATH",
     "STATE_PATH",
     "POLL_INTERVAL_SECONDS",
     "BATCH_LIMIT",
@@ -111,6 +113,7 @@ class Config:
     telegram_chat_id: str
     messages_db_path: Path
     notification_db_path: Path
+    app_map_path: Path
     state_path: Path
     poll_interval_seconds: float
     batch_limit: int
@@ -238,6 +241,7 @@ def load_config(config_path: Path) -> Config:
         notification_db_path=expand_path(
             raw.get("NOTIFICATION_DB_PATH", str(detect_notification_db_path()))
         ),
+        app_map_path=expand_path(raw.get("APP_MAP_PATH", str(DEFAULT_APP_MAP_PATH))),
         state_path=expand_path(raw.get("STATE_PATH", str(DEFAULT_STATE_PATH))),
         poll_interval_seconds=float(raw.get("POLL_INTERVAL_SECONDS", "5")),
         batch_limit=max(1, int(raw.get("BATCH_LIMIT", "20"))),
@@ -381,6 +385,39 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def load_app_map(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logging.warning("Invalid app map JSON: %s", path)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key).strip(): str(value).strip()
+        for key, value in raw.items()
+        if str(key).strip() and str(value).strip()
+    }
+
+
+def save_app_map(path: Path, app_map: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(dict(sorted(app_map.items())), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def app_display_name(config: Config, bundle_id: str | None, app_map: dict[str, str] | None = None) -> str:
+    bundle = bundle_id or "unknown app"
+    app_map = app_map if app_map is not None else load_app_map(config.app_map_path)
+    return app_map.get(bundle, bundle)
+
+
 def get_max_rowid(config: Config) -> int:
     with connect_messages_db(config.messages_db_path) as conn:
         row = conn.execute("SELECT COALESCE(MAX(ROWID), 0) AS max_rowid FROM message").fetchone()
@@ -515,6 +552,55 @@ def fetch_latest_notifications(config: Config, limit: int) -> list[NotificationR
             ),
         ).fetchall()
     return [row_to_notification(row) for row in reversed(rows)]
+
+
+def fetch_recent_notifications(config: Config, limit: int, app_filter: str | None = None) -> list[NotificationRow]:
+    limit = max(1, min(limit, 50))
+    read_limit = limit if not app_filter else min(max(limit * 20, 100), 1000)
+    query = """
+        SELECT
+            r.rec_id AS rec_id,
+            a.identifier AS bundle_id,
+            r.data AS data_blob,
+            r.delivered_date AS delivered_date,
+            r.presented AS presented
+        FROM record r
+        LEFT JOIN app a ON a.app_id = r.app_id
+        ORDER BY r.rec_id DESC
+        LIMIT ?
+    """
+    with connect_messages_db(config.notification_db_path) as conn:
+        rows = conn.execute(query, (read_limit,)).fetchall()
+
+    notifications = [row_to_notification(row) for row in rows]
+    if app_filter:
+        needle = app_filter.strip().lower()
+        app_map = load_app_map(config.app_map_path)
+        notifications = [
+            notification
+            for notification in notifications
+            if needle in (notification.bundle_id or "").lower()
+            or needle in app_display_name(config, notification.bundle_id, app_map).lower()
+        ]
+    return notifications[:limit]
+
+
+def fetch_notification_app_stats(config: Config, limit: int) -> list[dict[str, Any]]:
+    query = """
+        SELECT
+            a.identifier AS bundle_id,
+            COUNT(*) AS count,
+            MAX(r.delivered_date) AS last_delivered_date,
+            MAX(r.rec_id) AS last_rec_id
+        FROM record r
+        LEFT JOIN app a ON a.app_id = r.app_id
+        GROUP BY a.identifier
+        ORDER BY last_rec_id DESC
+        LIMIT ?
+    """
+    with connect_messages_db(config.notification_db_path) as conn:
+        rows = conn.execute(query, (max(1, min(limit, 100)),)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def row_to_message(row: sqlite3.Row) -> MessageRow:
@@ -994,6 +1080,56 @@ def format_local_datetime(value: dt.datetime | None) -> str:
     return value.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def notification_short_time(date_raw: int | float | None) -> str:
+    if not date_raw:
+        return "unknown"
+    raw = float(date_raw)
+    if raw > 100_000_000_000_000:
+        seconds = raw / 1_000_000_000
+    elif raw > 100_000_000_000:
+        seconds = raw / 1_000_000
+    else:
+        seconds = raw
+    try:
+        local_dt = (APPLE_EPOCH + dt.timedelta(seconds=seconds)).astimezone()
+    except OverflowError:
+        return "unknown"
+    return local_dt.strftime("%m-%d %H:%M")
+
+
+def truncate_cell(value: str, width: int) -> str:
+    value = " ".join(value.split())
+    if len(value) <= width:
+        return value
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
+
+
+def notification_row_summary(config: Config, notification: NotificationRow) -> str:
+    parsed = notification.parsed
+    title = parsed.get("title") or ""
+    subtitle = parsed.get("subtitle") or ""
+    body = parsed.get("body") or ""
+    if config.notification_text_mode == "app_only":
+        return ""
+    if config.notification_text_mode == "redacted":
+        return title or "[본문 숨김]"
+    parts = [part for part in [title, subtitle, body] if part]
+    return " / ".join(parts)
+
+
+def format_table(headers: list[str], rows: list[list[str]], widths: list[int]) -> str:
+    def render(values: list[str]) -> str:
+        cells = [truncate_cell(value, width).ljust(width) for value, width in zip(values, widths)]
+        return " | ".join(cells).rstrip()
+
+    separator = "-+-".join("-" * width for width in widths)
+    lines = [render(headers), separator]
+    lines.extend(render(row) for row in rows)
+    return "\n".join(lines)
+
+
 def forwarding_suppressed(state: dict[str, Any]) -> bool:
     if state.get("paused"):
         return True
@@ -1155,6 +1291,55 @@ def format_stock_quotes(symbols: Iterable[str]) -> str:
     return trim_telegram_text("\n".join(lines))
 
 
+def format_notification_list(config: Config, app_filter: str | None, limit: int) -> str:
+    notifications = fetch_recent_notifications(config, limit=limit, app_filter=app_filter)
+    title = "최근 알림 목록" if not app_filter else f"최근 알림 목록: {app_filter}"
+    if not notifications:
+        return f"{title}\n\n결과가 없습니다."
+
+    app_map = load_app_map(config.app_map_path)
+    rows = []
+    for notification in notifications:
+        rows.append(
+            [
+                notification_short_time(notification.delivered_date),
+                app_display_name(config, notification.bundle_id, app_map),
+                notification_row_summary(config, notification),
+            ]
+        )
+    table = format_table(["시간", "앱", "내용"], rows, [11, 18, 34])
+    return trim_telegram_text(f"{title}\n\n{table}")
+
+
+def format_app_stats(config: Config, limit: int = 30) -> str:
+    stats = fetch_notification_app_stats(config, limit=limit)
+    if not stats:
+        return "알림 앱 목록\n\n결과가 없습니다."
+    app_map = load_app_map(config.app_map_path)
+    rows = []
+    for item in stats:
+        bundle_id = item.get("bundle_id") or "unknown app"
+        rows.append(
+            [
+                app_display_name(config, bundle_id, app_map),
+                bundle_id,
+                str(item.get("count") or 0),
+                notification_short_time(item.get("last_delivered_date")),
+            ]
+        )
+    table = format_table(["이름", "번들 ID", "수", "최근"], rows, [16, 32, 5, 11])
+    return trim_telegram_text(f"알림 앱 목록\n\n{table}")
+
+
+def format_app_map(config: Config) -> str:
+    app_map = load_app_map(config.app_map_path)
+    if not app_map:
+        return f"앱 매핑 테이블이 비어 있습니다.\n파일: {config.app_map_path}"
+    rows = [[bundle_id, name] for bundle_id, name in sorted(app_map.items())]
+    table = format_table(["번들 ID", "표시 이름"], rows, [36, 24])
+    return trim_telegram_text(f"앱 매핑 테이블\n파일: {config.app_map_path}\n\n{table}")
+
+
 def format_brief(config: Config) -> str:
     sections = ["아침 브리핑", format_news(config, query=None, limit=5)]
     if config.stock_watchlist:
@@ -1164,20 +1349,68 @@ def format_brief(config: Config) -> str:
 
 def command_help() -> str:
     return """명령어
-/status - 현재 상태
-/pause, /resume - 전달 일시정지/재개
-/mute 30m, /unmute - 일정 시간 조용히
-/messages on|off - Messages 전달 토글
-/noti on|off - 다른 앱 알림 전달 토글
-/mode full|redacted|sender_only - 메시지 본문 모드
-/notimode full|redacted|app_only - 알림 본문 모드
-/deny <bundle_id>, /undeny <bundle_id> - 앱 알림 제외/해제
-/denylist - 제외 앱 목록
-/news [검색어] [개수] - 주요 뉴스 또는 뉴스 검색
-/stock <심볼...> - 주식/지수 조회 예: /stock AAPL 005930.KS
-/brief - 주요 뉴스 + 관심 종목
-/test - 테스트 메시지
-/help - 도움말"""
+/status
+현재 상태를 보여줍니다.
+
+/pause
+전달을 일시정지합니다.
+
+/resume
+전달을 다시 시작합니다.
+
+/mute
+일정 시간 조용히 합니다. 예: /mute 30m, /mute 2h
+
+/unmute
+mute를 해제합니다.
+
+/messages
+Messages 전달을 켜거나 끕니다. 예: /messages on, /messages off
+
+/noti
+다른 앱 알림 전달을 켜거나 끕니다. 예: /noti on, /noti off
+
+/mode
+Messages 본문 모드를 바꿉니다. 예: /mode full, /mode redacted, /mode sender_only
+
+/notimode
+알림 본문 모드를 바꿉니다. 예: /notimode full, /notimode redacted, /notimode app_only
+
+/deny
+앱 알림을 제외합니다. 예: /deny com.kakao.kakaotalkmac
+
+/undeny
+앱 알림 제외를 해제합니다. 예: /undeny com.kakao.kakaotalkmac
+
+/denylist
+제외 앱 목록을 보여줍니다.
+
+/notilist
+최근 알림 표를 보여줍니다. 예: /notilist, /notilist all 20, /notilist KakaoTalk 10
+
+/apps
+알림 앱과 번들 ID 표를 보여줍니다. 예: /apps, /apps 50
+
+/map
+번들 ID 표시 이름 매핑을 관리합니다. 예: /map, /map path, /map set com.kakao.kakaotalkmac KakaoTalk
+
+/unmap
+번들 ID 표시 이름 매핑을 제거합니다. 예: /unmap com.kakao.kakaotalkmac
+
+/news
+주요 뉴스 또는 검색 뉴스를 보여줍니다. 예: /news, /news AI, /news 반도체 5
+
+/stock
+주식/지수를 조회합니다. 예: /stock AAPL, /stock AAPL NVDA 005930.KS
+
+/brief
+주요 뉴스와 관심 종목을 함께 보여줍니다.
+
+/test
+봇 명령 루프가 살아 있는지 확인합니다.
+
+/help
+도움말을 보여줍니다."""
 
 
 def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
@@ -1259,6 +1492,54 @@ def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
     if command == "/denylist":
         values = load_env_file(config.config_path).get("NOTIFICATION_APP_DENYLIST", "")
         return "제외 앱 목록\n" + (values or "(empty)")
+
+    if command == "/notilist":
+        limit = 15
+        app_filter = None
+        if args:
+            if args[-1].isdigit():
+                limit = int(args[-1])
+                args = args[:-1]
+            if args and args[0].lower() != "all":
+                app_filter = " ".join(args)
+        return format_notification_list(config, app_filter=app_filter, limit=limit)
+
+    if command == "/apps":
+        limit = int(args[0]) if args and args[0].isdigit() else 30
+        return format_app_stats(config, limit=limit)
+
+    if command == "/map":
+        if not args:
+            return format_app_map(config)
+        action = args[0].lower()
+        if action == "path":
+            return f"앱 매핑 파일\n{config.app_map_path}"
+        if action == "set":
+            if len(args) < 3:
+                return "사용법: /map set <bundle_id> <표시 이름>"
+            bundle_id = args[1]
+            name = " ".join(args[2:]).strip()
+            app_map = load_app_map(config.app_map_path)
+            app_map[bundle_id] = name
+            save_app_map(config.app_map_path, app_map)
+            return f"매핑 추가/수정: {bundle_id} -> {name}"
+        if action in {"unset", "delete", "del"}:
+            if len(args) < 2:
+                return "사용법: /map unset <bundle_id>"
+            bundle_id = args[1]
+            app_map = load_app_map(config.app_map_path)
+            removed = app_map.pop(bundle_id, None)
+            save_app_map(config.app_map_path, app_map)
+            return f"매핑 제거: {bundle_id}" if removed else f"매핑이 없습니다: {bundle_id}"
+        return "사용법: /map, /map path, /map set <bundle_id> <표시 이름>, /map unset <bundle_id>"
+
+    if command == "/unmap":
+        if not args:
+            return "사용법: /unmap <bundle_id>"
+        app_map = load_app_map(config.app_map_path)
+        removed = app_map.pop(args[0], None)
+        save_app_map(config.app_map_path, app_map)
+        return f"매핑 제거: {args[0]}" if removed else f"매핑이 없습니다: {args[0]}"
 
     if command == "/news":
         limit = 5
