@@ -585,6 +585,24 @@ def fetch_recent_notifications(config: Config, limit: int, app_filter: str | Non
     return notifications[:limit]
 
 
+def fetch_notification_by_rec_id(config: Config, rec_id: int) -> NotificationRow | None:
+    query = """
+        SELECT
+            r.rec_id AS rec_id,
+            a.identifier AS bundle_id,
+            r.data AS data_blob,
+            r.delivered_date AS delivered_date,
+            r.presented AS presented
+        FROM record r
+        LEFT JOIN app a ON a.app_id = r.app_id
+        WHERE r.rec_id = ?
+        LIMIT 1
+    """
+    with connect_messages_db(config.notification_db_path) as conn:
+        row = conn.execute(query, (rec_id,)).fetchone()
+    return row_to_notification(row) if row else None
+
+
 def fetch_notification_app_stats(config: Config, limit: int) -> list[dict[str, Any]]:
     query = """
         SELECT
@@ -1024,18 +1042,30 @@ def send_telegram_message(config: Config, text: str) -> None:
     )
 
 
-def send_telegram_to_chat(config: Config, chat_id: str | int, text: str) -> None:
-    telegram_request(
-        config,
-        "sendMessage",
-        {
-            "chat_id": str(chat_id),
-            "text": trim_telegram_text(text),
-            "disable_web_page_preview": True,
-            "disable_notification": config.disable_notification,
-            "protect_content": config.protect_content,
-        },
-    )
+def send_telegram_to_chat(
+    config: Config,
+    chat_id: str | int,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "chat_id": str(chat_id),
+        "text": trim_telegram_text(text),
+        "disable_web_page_preview": True,
+        "disable_notification": config.disable_notification,
+        "protect_content": config.protect_content,
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    telegram_request(config, "sendMessage", payload)
+
+
+def answer_callback_query(config: Config, callback_query_id: str, text: str | None = None) -> None:
+    payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = False
+    telegram_request(config, "answerCallbackQuery", payload)
 
 
 def authorized_chat_ids(config: Config) -> set[str]:
@@ -1117,6 +1147,57 @@ def notification_row_summary(config: Config, notification: NotificationRow) -> s
         return title or "[본문 숨김]"
     parts = [part for part in [title, subtitle, body] if part]
     return " / ".join(parts)
+
+
+def notification_card_summary(config: Config, notification: NotificationRow, app_map: dict[str, str]) -> str:
+    parsed = notification.parsed
+    title = parsed.get("title") or "(제목 없음)"
+    subtitle = parsed.get("subtitle") or ""
+    body = parsed.get("body") or ""
+    app_name = app_display_name(config, notification.bundle_id, app_map)
+    lines = [
+        f"{notification_short_time(notification.delivered_date)} | {app_name}",
+        truncate_cell(title, 80),
+    ]
+    if subtitle:
+        lines.append(truncate_cell(subtitle, 80))
+    if body and config.notification_text_mode == "full":
+        lines.append(truncate_cell(body, 120))
+    elif config.notification_text_mode == "redacted":
+        lines.append("[본문 숨김]")
+    return "\n".join(lines)
+
+
+def notification_detail_text(config: Config, notification: NotificationRow) -> str:
+    parsed = notification.parsed
+    app_map = load_app_map(config.app_map_path)
+    app_name = app_display_name(config, notification.bundle_id, app_map)
+    bundle_id = notification.bundle_id or "unknown app"
+    title = parsed.get("title") or ""
+    subtitle = parsed.get("subtitle") or ""
+    body = parsed.get("body") or ""
+
+    if config.notification_text_mode == "redacted":
+        body = "[본문 숨김]"
+    elif config.notification_text_mode == "app_only":
+        title = ""
+        subtitle = ""
+        body = ""
+
+    lines = [
+        "알림 상세",
+        f"rec_id: {notification.rec_id}",
+        f"시간: {apple_date_to_local(notification.delivered_date)}",
+        f"앱: {app_name}",
+        f"번들 ID: {bundle_id}",
+    ]
+    if title:
+        lines.append(f"제목: {title}")
+    if subtitle:
+        lines.append(f"부제목: {subtitle}")
+    if body:
+        lines.extend(["", body])
+    return trim_telegram_text("\n".join(lines))
 
 
 def format_table(headers: list[str], rows: list[list[str]], widths: list[int]) -> str:
@@ -1298,17 +1379,49 @@ def format_notification_list(config: Config, app_filter: str | None, limit: int)
         return f"{title}\n\n결과가 없습니다."
 
     app_map = load_app_map(config.app_map_path)
-    rows = []
-    for notification in notifications:
-        rows.append(
-            [
-                notification_short_time(notification.delivered_date),
-                app_display_name(config, notification.bundle_id, app_map),
-                notification_row_summary(config, notification),
-            ]
+    lines = [title]
+    for index, notification in enumerate(notifications, 1):
+        lines.append("")
+        lines.append(f"{index}. {notification_card_summary(config, notification, app_map)}")
+    return trim_telegram_text("\n".join(lines))
+
+
+def build_notification_list_response(
+    config: Config,
+    app_filter: str | None,
+    limit: int,
+) -> tuple[str, dict[str, Any] | None]:
+    notifications = fetch_recent_notifications(config, limit=limit, app_filter=app_filter)
+    text = format_notification_list(config, app_filter=app_filter, limit=limit)
+    if not notifications:
+        return text, None
+    keyboard = []
+    row = []
+    for index, notification in enumerate(notifications, 1):
+        row.append(
+            {
+                "text": f"{index} 자세히 보기",
+                "callback_data": f"notif:{notification.rec_id}",
+            }
         )
-    table = format_table(["시간", "앱", "내용"], rows, [11, 18, 34])
-    return trim_telegram_text(f"{title}\n\n{table}")
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    return text, {"inline_keyboard": keyboard}
+
+
+def parse_notilist_args(args: list[str]) -> tuple[str | None, int]:
+    limit = 10
+    app_filter = None
+    if args:
+        if args[-1].isdigit():
+            limit = int(args[-1])
+            args = args[:-1]
+        if args and args[0].lower() != "all":
+            app_filter = " ".join(args)
+    return app_filter, max(1, min(limit, 20))
 
 
 def format_app_stats(config: Config, limit: int = 30) -> str:
@@ -1386,7 +1499,7 @@ Messages 본문 모드를 바꿉니다. 예: /mode full, /mode redacted, /mode s
 제외 앱 목록을 보여줍니다.
 
 /notilist
-최근 알림 표를 보여줍니다. 예: /notilist, /notilist all 20, /notilist KakaoTalk 10
+최근 알림 카드와 자세히 보기 버튼을 보여줍니다. 예: /notilist, /notilist all 20, /notilist KakaoTalk 10
 
 /apps
 알림 앱과 번들 ID 표를 보여줍니다. 예: /apps, /apps 50
@@ -1494,14 +1607,7 @@ def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
         return "제외 앱 목록\n" + (values or "(empty)")
 
     if command == "/notilist":
-        limit = 15
-        app_filter = None
-        if args:
-            if args[-1].isdigit():
-                limit = int(args[-1])
-                args = args[:-1]
-            if args and args[0].lower() != "all":
-                app_filter = " ".join(args)
+        app_filter, limit = parse_notilist_args(args)
         return format_notification_list(config, app_filter=app_filter, limit=limit)
 
     if command == "/apps":
@@ -1572,7 +1678,7 @@ def process_telegram_commands(config: Config, state: dict[str, Any]) -> None:
             "offset": int(state.get("telegram_last_update_id", 0)) + 1,
             "limit": 25,
             "timeout": 0,
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "callback_query"],
         },
     )
     changed = False
@@ -1580,6 +1686,11 @@ def process_telegram_commands(config: Config, state: dict[str, Any]) -> None:
         update_id = int(update.get("update_id", 0))
         state["telegram_last_update_id"] = max(int(state.get("telegram_last_update_id", 0)), update_id)
         changed = True
+        callback_query = update.get("callback_query")
+        if isinstance(callback_query, dict):
+            handle_callback_query(config, callback_query)
+            continue
+
         message = update.get("message")
         if not isinstance(message, dict):
             continue
@@ -1592,14 +1703,49 @@ def process_telegram_commands(config: Config, state: dict[str, Any]) -> None:
             logging.warning("Ignoring command from unauthorized chat_id=%s", chat_id)
             continue
         try:
-            response = handle_command(config, state, text)
-            send_telegram_to_chat(config, chat_id, response)
+            command = text.strip().split()[0].split("@", 1)[0].lower()
+            if command == "/notilist":
+                app_filter, limit = parse_notilist_args(text.strip().split()[1:])
+                response, reply_markup = build_notification_list_response(config, app_filter, limit)
+                send_telegram_to_chat(config, chat_id, response, reply_markup=reply_markup)
+            else:
+                response = handle_command(config, state, text)
+                send_telegram_to_chat(config, chat_id, response)
         except Exception as exc:
             logging.exception("Command failed")
             send_telegram_to_chat(config, chat_id, f"명령 처리 실패: {exc}")
         changed = True
     if changed:
         save_state(config.state_path, state)
+
+
+def handle_callback_query(config: Config, callback_query: dict[str, Any]) -> None:
+    callback_id = str(callback_query.get("id", ""))
+    data = str(callback_query.get("data", ""))
+    message = callback_query.get("message")
+    chat = message.get("chat") if isinstance(message, dict) else None
+    chat_id = chat.get("id") if isinstance(chat, dict) else None
+
+    if not callback_id:
+        return
+    if not is_authorized_chat(config, chat_id):
+        answer_callback_query(config, callback_id, "권한이 없습니다.")
+        logging.warning("Ignoring callback from unauthorized chat_id=%s", chat_id)
+        return
+    if not data.startswith("notif:"):
+        answer_callback_query(config, callback_id)
+        return
+    try:
+        rec_id = int(data.split(":", 1)[1])
+    except ValueError:
+        answer_callback_query(config, callback_id, "잘못된 알림 ID입니다.")
+        return
+    notification = fetch_notification_by_rec_id(config, rec_id)
+    if not notification:
+        answer_callback_query(config, callback_id, "알림을 찾을 수 없습니다.")
+        return
+    answer_callback_query(config, callback_id, "상세 내용을 보냅니다.")
+    send_telegram_to_chat(config, chat_id, notification_detail_text(config, notification))
 
 
 def initialize_command_state(config: Config, state: dict[str, Any]) -> None:

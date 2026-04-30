@@ -150,7 +150,7 @@ Telegram 봇 명령은 설정된 `TELEGRAM_CHAT_ID`에서 기본 활성화됩니
 /notimode full|redacted|app_only
 /deny com.example.App
 /denylist
-/notilist all 15
+/notilist all 10
 /notilist KakaoTalk 10
 /apps 30
 /map set com.kakao.kakaotalkmac KakaoTalk
