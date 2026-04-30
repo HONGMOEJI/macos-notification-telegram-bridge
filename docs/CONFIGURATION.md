@@ -56,6 +56,22 @@ Enable Notification Center polling.
 
 Notification Center 폴링을 켭니다.
 
+### `BOT_COMMANDS_ENABLED`
+
+Default: `1`
+
+기본값: `1`
+
+Enable Telegram bot commands.
+
+Telegram 봇 명령어를 켭니다.
+
+### `BOT_ALLOWED_CHAT_IDS`
+
+Optional comma-separated extra chat IDs allowed to control the bot.
+
+봇을 제어할 수 있는 추가 chat ID 목록입니다.
+
 ## Paths / 경로
 
 ### `MESSAGES_DB_PATH`
@@ -266,3 +282,35 @@ Default: `INFO`
 Common values: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
 
 일반적인 값: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
+
+## News and Stocks / 뉴스와 주식
+
+### `NEWS_LANGUAGE`
+
+Default: `ko`
+
+Google News RSS language.
+
+Google News RSS 언어입니다.
+
+### `NEWS_COUNTRY`
+
+Default: `KR`
+
+Google News RSS country.
+
+Google News RSS 국가입니다.
+
+### `STOCK_WATCHLIST`
+
+Default:
+
+기본값:
+
+```env
+STOCK_WATCHLIST=^GSPC,^IXIC,AAPL,NVDA,005930.KS
+```
+
+Symbols used by `/brief`.
+
+`/brief`에서 사용할 관심 종목입니다.

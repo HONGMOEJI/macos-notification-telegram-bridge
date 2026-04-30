@@ -24,7 +24,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -39,10 +40,16 @@ DEFAULT_NOTIFICATION_DB = (
 )
 APPLE_EPOCH = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)
 TELEGRAM_MAX_TEXT = 4096
+HTTP_USER_AGENT = "messages-to-telegram/0.1"
+DEFAULT_NEWS_LANGUAGE = "ko"
+DEFAULT_NEWS_COUNTRY = "KR"
+DEFAULT_STOCK_WATCHLIST = "^GSPC,^IXIC,AAPL,NVDA,005930.KS"
 
 ENV_KEYS = {
     "WATCH_MESSAGES",
     "WATCH_NOTIFICATIONS",
+    "BOT_COMMANDS_ENABLED",
+    "BOT_ALLOWED_CHAT_IDS",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "MESSAGES_DB_PATH",
@@ -63,6 +70,9 @@ ENV_KEYS = {
     "DISABLE_NOTIFICATION",
     "PROTECT_CONTENT",
     "SEND_STARTUP_MESSAGE",
+    "NEWS_LANGUAGE",
+    "NEWS_COUNTRY",
+    "STOCK_WATCHLIST",
     "LOG_LEVEL",
 }
 
@@ -92,8 +102,11 @@ IGNORED_ARCHIVE_STRINGS = {
 
 @dataclass(frozen=True)
 class Config:
+    config_path: Path
     watch_messages: bool
     watch_notifications: bool
+    bot_commands_enabled: bool
+    bot_allowed_chat_ids: tuple[str, ...]
     telegram_bot_token: str
     telegram_chat_id: str
     messages_db_path: Path
@@ -114,6 +127,9 @@ class Config:
     disable_notification: bool
     protect_content: bool
     send_startup_message: bool
+    news_language: str
+    news_country: str
+    stock_watchlist: tuple[str, ...]
     log_level: str
 
 
@@ -211,8 +227,11 @@ def load_config(config_path: Path) -> Config:
     chat_id = raw.get("TELEGRAM_CHAT_ID", "").strip()
 
     return Config(
+        config_path=config_path,
         watch_messages=parse_bool(raw.get("WATCH_MESSAGES"), True),
         watch_notifications=parse_bool(raw.get("WATCH_NOTIFICATIONS"), False),
+        bot_commands_enabled=parse_bool(raw.get("BOT_COMMANDS_ENABLED"), True),
+        bot_allowed_chat_ids=parse_csv(raw.get("BOT_ALLOWED_CHAT_IDS")),
         telegram_bot_token=token,
         telegram_chat_id=chat_id,
         messages_db_path=expand_path(raw.get("MESSAGES_DB_PATH", str(DEFAULT_MESSAGES_DB))),
@@ -242,6 +261,9 @@ def load_config(config_path: Path) -> Config:
         disable_notification=parse_bool(raw.get("DISABLE_NOTIFICATION"), False),
         protect_content=parse_bool(raw.get("PROTECT_CONTENT"), False),
         send_startup_message=parse_bool(raw.get("SEND_STARTUP_MESSAGE"), True),
+        news_language=raw.get("NEWS_LANGUAGE", DEFAULT_NEWS_LANGUAGE).strip() or DEFAULT_NEWS_LANGUAGE,
+        news_country=raw.get("NEWS_COUNTRY", DEFAULT_NEWS_COUNTRY).strip().upper() or DEFAULT_NEWS_COUNTRY,
+        stock_watchlist=parse_csv(raw.get("STOCK_WATCHLIST", DEFAULT_STOCK_WATCHLIST)),
         log_level=raw.get("LOG_LEVEL", "INFO").strip().upper(),
     )
 
@@ -798,7 +820,7 @@ def telegram_request(config: Config, method: str, payload: dict[str, Any] | None
     except RuntimeError as exc:
         if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
             raise
-        logging.warning("Python TLS verification failed; retrying Telegram request with curl")
+        logging.debug("Python TLS verification failed; retrying Telegram request with curl")
         return telegram_request_curl(config, method, payload)
 
 
@@ -874,6 +896,35 @@ def curl_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def http_get_bytes(url: str, timeout: int = 20) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+            raise RuntimeError(f"HTTP request failed: {exc}") from exc
+
+    curl_path = "/usr/bin/curl"
+    if not Path(curl_path).exists():
+        raise RuntimeError("Python TLS verification failed and /usr/bin/curl is not available")
+    proc = subprocess.run(
+        [curl_path, "-fsSL", "--max-time", str(timeout), "-A", HTTP_USER_AGENT, url],
+        text=False,
+        capture_output=True,
+        check=False,
+        timeout=timeout + 5,
+    )
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"curl request failed: {stderr}")
+    return proc.stdout
+
+
+def http_get_json(url: str, timeout: int = 20) -> Any:
+    return json.loads(http_get_bytes(url, timeout=timeout).decode("utf-8"))
+
+
 def send_telegram_message(config: Config, text: str) -> None:
     telegram_request(
         config,
@@ -885,6 +936,410 @@ def send_telegram_message(config: Config, text: str) -> None:
             "protect_content": config.protect_content,
         },
     )
+
+
+def send_telegram_to_chat(config: Config, chat_id: str | int, text: str) -> None:
+    telegram_request(
+        config,
+        "sendMessage",
+        {
+            "chat_id": str(chat_id),
+            "text": trim_telegram_text(text),
+            "disable_web_page_preview": True,
+            "disable_notification": config.disable_notification,
+            "protect_content": config.protect_content,
+        },
+    )
+
+
+def authorized_chat_ids(config: Config) -> set[str]:
+    ids = {config.telegram_chat_id.strip()} if config.telegram_chat_id.strip() else set()
+    ids.update(item.strip() for item in config.bot_allowed_chat_ids if item.strip())
+    return ids
+
+
+def is_authorized_chat(config: Config, chat_id: Any) -> bool:
+    return str(chat_id) in authorized_chat_ids(config)
+
+
+def parse_duration_seconds(value: str) -> int | None:
+    match = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", value.lower())
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2) or "m"
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return amount * multipliers[unit]
+
+
+def iso_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def parse_iso_datetime(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+def format_local_datetime(value: dt.datetime | None) -> str:
+    if value is None:
+        return "not set"
+    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def forwarding_suppressed(state: dict[str, Any]) -> bool:
+    if state.get("paused"):
+        return True
+    mute_until = parse_iso_datetime(state.get("mute_until"))
+    return bool(mute_until and mute_until > dt.datetime.now(dt.timezone.utc))
+
+
+def apply_runtime_state(config: Config, state: dict[str, Any]) -> Config:
+    updates: dict[str, Any] = {}
+    if "runtime_watch_messages" in state:
+        updates["watch_messages"] = bool(state["runtime_watch_messages"])
+    if "runtime_watch_notifications" in state:
+        updates["watch_notifications"] = bool(state["runtime_watch_notifications"])
+    if state.get("runtime_message_text_mode"):
+        updates["message_text_mode"] = str(state["runtime_message_text_mode"])
+    if state.get("runtime_notification_text_mode"):
+        updates["notification_text_mode"] = str(state["runtime_notification_text_mode"])
+    return replace(config, **updates) if updates else config
+
+
+def update_env_value(path: Path, key: str, value: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    output: list[str] = []
+    updated = False
+    for line in lines:
+        if line.startswith(f"{key}="):
+            output.append(f"{key}={value}")
+            updated = True
+        else:
+            output.append(line)
+    if not updated:
+        output.append(f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+def update_csv_env_value(path: Path, key: str, item: str, add: bool) -> str:
+    values = load_env_file(path)
+    parts = [part.strip() for part in values.get(key, "").split(",") if part.strip()]
+    lowered = {part.lower(): part for part in parts}
+    normalized = item.strip()
+    if add:
+        lowered.setdefault(normalized.lower(), normalized)
+    else:
+        lowered.pop(normalized.lower(), None)
+    result = ",".join(lowered.values())
+    update_env_value(path, key, result)
+    return result
+
+
+def fetch_news_items(config: Config, query: str | None, limit: int = 5) -> list[dict[str, str]]:
+    limit = max(1, min(limit, 10))
+    language = config.news_language
+    country = config.news_country
+    ceid = f"{country}:{language}"
+    params = {"hl": language, "gl": country, "ceid": ceid}
+    if query:
+        params["q"] = query
+        base = "https://news.google.com/rss/search"
+    else:
+        base = "https://news.google.com/rss"
+    url = base + "?" + urllib.parse.urlencode(params)
+    root = ET.fromstring(http_get_bytes(url))
+    items: list[dict[str, str]] = []
+    for item in root.findall("./channel/item"):
+        source = item.find("source")
+        items.append(
+            {
+                "title": (item.findtext("title") or "").strip(),
+                "link": (item.findtext("link") or "").strip(),
+                "published": (item.findtext("pubDate") or "").strip(),
+                "source": (source.text or "").strip() if source is not None else "",
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def format_news(config: Config, query: str | None, limit: int = 5) -> str:
+    items = fetch_news_items(config, query=query, limit=limit)
+    title = "주요 뉴스" if not query else f"뉴스 검색: {query}"
+    if not items:
+        return f"{title}\n\n결과가 없습니다."
+    lines = [title]
+    for index, item in enumerate(items, 1):
+        source = f" ({item['source']})" if item.get("source") else ""
+        lines.append(f"\n{index}. {item['title']}{source}")
+        if item.get("link"):
+            lines.append(item["link"])
+    return trim_telegram_text("\n".join(lines))
+
+
+def fetch_stock_quote(symbol: str) -> dict[str, Any]:
+    encoded = urllib.parse.quote(symbol.strip(), safe="^.")
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=1d&interval=1m"
+    data = http_get_json(url)
+    result = (data.get("chart", {}).get("result") or [None])[0]
+    if not result:
+        error = data.get("chart", {}).get("error")
+        raise RuntimeError(error.get("description", "No quote data") if isinstance(error, dict) else "No quote data")
+    meta = result.get("meta", {})
+    price = meta.get("regularMarketPrice")
+    previous = meta.get("chartPreviousClose") or meta.get("previousClose")
+    change = price - previous if isinstance(price, (int, float)) and isinstance(previous, (int, float)) else None
+    change_pct = (change / previous * 100) if change is not None and previous else None
+    market_time = meta.get("regularMarketTime")
+    return {
+        "symbol": meta.get("symbol") or symbol.upper(),
+        "name": meta.get("longName") or meta.get("shortName") or "",
+        "currency": meta.get("currency") or "",
+        "exchange": meta.get("exchangeName") or meta.get("fullExchangeName") or "",
+        "price": price,
+        "previous": previous,
+        "change": change,
+        "change_pct": change_pct,
+        "market_time": market_time,
+    }
+
+
+def format_number(value: Any, decimals: int = 2) -> str:
+    if not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{value:,.{decimals}f}"
+
+
+def format_stock_quotes(symbols: Iterable[str]) -> str:
+    clean_symbols = [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+    clean_symbols = clean_symbols[:8]
+    if not clean_symbols:
+        return "사용법: /stock AAPL 또는 /stock 005930.KS"
+
+    lines = ["주식/지수 조회"]
+    for symbol in clean_symbols:
+        try:
+            quote = fetch_stock_quote(symbol)
+        except Exception as exc:
+            lines.append(f"\n{symbol}: 조회 실패 ({exc})")
+            continue
+
+        change = quote["change"]
+        change_pct = quote["change_pct"]
+        sign = "+" if isinstance(change, (int, float)) and change > 0 else ""
+        market_time = quote.get("market_time")
+        time_text = ""
+        if isinstance(market_time, (int, float)):
+            time_text = dt.datetime.fromtimestamp(market_time).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        name = f" - {quote['name']}" if quote.get("name") else ""
+        currency = f" {quote['currency']}" if quote.get("currency") else ""
+        exchange = f" [{quote['exchange']}]" if quote.get("exchange") else ""
+        lines.append(
+            "\n"
+            f"{quote['symbol']}{name}{exchange}\n"
+            f"Price: {format_number(quote['price'])}{currency}\n"
+            f"Change: {sign}{format_number(change)} ({sign}{format_number(change_pct)}%)"
+        )
+        if time_text:
+            lines.append(f"Time: {time_text}")
+    return trim_telegram_text("\n".join(lines))
+
+
+def format_brief(config: Config) -> str:
+    sections = ["아침 브리핑", format_news(config, query=None, limit=5)]
+    if config.stock_watchlist:
+        sections.append(format_stock_quotes(config.stock_watchlist[:5]))
+    return trim_telegram_text(("\n\n" + ("=" * 24) + "\n\n").join(sections))
+
+
+def command_help() -> str:
+    return """명령어
+/status - 현재 상태
+/pause, /resume - 전달 일시정지/재개
+/mute 30m, /unmute - 일정 시간 조용히
+/messages on|off - Messages 전달 토글
+/noti on|off - 다른 앱 알림 전달 토글
+/mode full|redacted|sender_only - 메시지 본문 모드
+/notimode full|redacted|app_only - 알림 본문 모드
+/deny <bundle_id>, /undeny <bundle_id> - 앱 알림 제외/해제
+/denylist - 제외 앱 목록
+/news [검색어] [개수] - 주요 뉴스 또는 뉴스 검색
+/stock <심볼...> - 주식/지수 조회 예: /stock AAPL 005930.KS
+/brief - 주요 뉴스 + 관심 종목
+/test - 테스트 메시지
+/help - 도움말"""
+
+
+def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
+    parts = text.strip().split()
+    command = parts[0].split("@", 1)[0].lower()
+    args = parts[1:]
+
+    if command in {"/help", "/start"}:
+        return command_help()
+
+    if command == "/status":
+        active = apply_runtime_state(config, state)
+        mute_until = parse_iso_datetime(state.get("mute_until"))
+        paused = bool(state.get("paused"))
+        suppressed = forwarding_suppressed(state)
+        return (
+            "상태\n"
+            f"Messages: {'on' if active.watch_messages else 'off'}\n"
+            f"Notifications: {'on' if active.watch_notifications else 'off'}\n"
+            f"Paused: {'yes' if paused else 'no'}\n"
+            f"Muted until: {format_local_datetime(mute_until)}\n"
+            f"Suppressed now: {'yes' if suppressed else 'no'}\n"
+            f"Message mode: {active.message_text_mode}\n"
+            f"Notification mode: {active.notification_text_mode}\n"
+            f"Messages last ROWID: {state.get('messages_last_rowid', 'n/a')}\n"
+            f"Notifications last rec_id: {state.get('notifications_last_rec_id', 'n/a')}"
+        )
+
+    if command == "/pause":
+        state["paused"] = True
+        return "전달을 일시정지했습니다. /resume 으로 다시 켤 수 있습니다."
+
+    if command == "/resume":
+        state["paused"] = False
+        state.pop("mute_until", None)
+        return "전달을 재개했습니다."
+
+    if command == "/mute":
+        duration = parse_duration_seconds(args[0]) if args else parse_duration_seconds("30m")
+        if duration is None:
+            return "사용법: /mute 30m 또는 /mute 2h"
+        until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=duration)
+        state["mute_until"] = until.isoformat()
+        return f"{format_local_datetime(until)}까지 전달을 조용히 합니다."
+
+    if command == "/unmute":
+        state.pop("mute_until", None)
+        return "mute를 해제했습니다."
+
+    if command in {"/messages", "/noti"}:
+        if not args or args[0].lower() not in {"on", "off"}:
+            return f"사용법: {command} on 또는 {command} off"
+        enabled = args[0].lower() == "on"
+        if command == "/messages":
+            state["runtime_watch_messages"] = enabled
+            return f"Messages 전달: {'on' if enabled else 'off'}"
+        state["runtime_watch_notifications"] = enabled
+        return f"다른 앱 알림 전달: {'on' if enabled else 'off'}"
+
+    if command == "/mode":
+        if not args or args[0].lower() not in {"full", "redacted", "sender_only"}:
+            return "사용법: /mode full|redacted|sender_only"
+        state["runtime_message_text_mode"] = args[0].lower()
+        return f"메시지 모드: {args[0].lower()}"
+
+    if command == "/notimode":
+        if not args or args[0].lower() not in {"full", "redacted", "app_only"}:
+            return "사용법: /notimode full|redacted|app_only"
+        state["runtime_notification_text_mode"] = args[0].lower()
+        return f"알림 모드: {args[0].lower()}"
+
+    if command in {"/deny", "/undeny"}:
+        if not args:
+            return f"사용법: {command} com.example.App"
+        add = command == "/deny"
+        result = update_csv_env_value(config.config_path, "NOTIFICATION_APP_DENYLIST", args[0], add=add)
+        return f"NOTIFICATION_APP_DENYLIST={result or '(empty)'}"
+
+    if command == "/denylist":
+        values = load_env_file(config.config_path).get("NOTIFICATION_APP_DENYLIST", "")
+        return "제외 앱 목록\n" + (values or "(empty)")
+
+    if command == "/news":
+        limit = 5
+        query_parts = args
+        if args and args[-1].isdigit():
+            limit = int(args[-1])
+            query_parts = args[:-1]
+        query = " ".join(query_parts).strip() or None
+        return format_news(config, query=query, limit=limit)
+
+    if command == "/stock":
+        return format_stock_quotes(args)
+
+    if command == "/brief":
+        return format_brief(config)
+
+    if command == "/test":
+        return f"{APP_NAME} is alive on {socket.gethostname()}."
+
+    return "알 수 없는 명령입니다. /help 를 보내보세요."
+
+
+def process_telegram_commands(config: Config, state: dict[str, Any]) -> None:
+    if not config.bot_commands_enabled:
+        return
+    updates = telegram_request(
+        config,
+        "getUpdates",
+        {
+            "offset": int(state.get("telegram_last_update_id", 0)) + 1,
+            "limit": 25,
+            "timeout": 0,
+            "allowed_updates": ["message"],
+        },
+    )
+    changed = False
+    for update in updates:
+        update_id = int(update.get("update_id", 0))
+        state["telegram_last_update_id"] = max(int(state.get("telegram_last_update_id", 0)), update_id)
+        changed = True
+        message = update.get("message")
+        if not isinstance(message, dict):
+            continue
+        chat = message.get("chat")
+        text = message.get("text")
+        if not isinstance(chat, dict) or not isinstance(text, str) or not text.startswith("/"):
+            continue
+        chat_id = chat.get("id")
+        if not is_authorized_chat(config, chat_id):
+            logging.warning("Ignoring command from unauthorized chat_id=%s", chat_id)
+            continue
+        try:
+            response = handle_command(config, state, text)
+            send_telegram_to_chat(config, chat_id, response)
+        except Exception as exc:
+            logging.exception("Command failed")
+            send_telegram_to_chat(config, chat_id, f"명령 처리 실패: {exc}")
+        changed = True
+    if changed:
+        save_state(config.state_path, state)
+
+
+def initialize_command_state(config: Config, state: dict[str, Any]) -> None:
+    if not config.bot_commands_enabled or "telegram_last_update_id" in state:
+        return
+    try:
+        updates = telegram_request(config, "getUpdates", {"limit": 100, "timeout": 0})
+    except Exception:
+        logging.exception("Could not initialize Telegram command offset")
+        return
+    max_update_id = max((int(update.get("update_id", 0)) for update in updates), default=0)
+    state["telegram_last_update_id"] = max_update_id
+    save_state(config.state_path, state)
+
+
+def mark_sources_seen(config: Config, state: dict[str, Any]) -> None:
+    if config.watch_messages:
+        state["messages_last_rowid"] = get_max_rowid(config)
+    if config.watch_notifications:
+        state["notifications_last_rec_id"] = get_max_notification_rec_id(config)
+    save_state(config.state_path, state)
 
 
 def forward_rows(config: Config, rows: list[MessageRow], state: dict[str, Any], dry_run: bool) -> int:
@@ -987,6 +1442,7 @@ def initialize_state(
 
     state["initialized_at"] = state.get("initialized_at") or dt.datetime.now(dt.timezone.utc).isoformat()
     save_state(config.state_path, state)
+    initialize_command_state(config, state)
     return state
 
 
@@ -1010,21 +1466,32 @@ def run_loop(config: Config, message_backfill: int, notification_backfill: int, 
 
     while True:
         try:
-            if config.watch_messages:
-                rows = fetch_messages_after(config, int(state.get("messages_last_rowid", 0)))
+            config = load_config(config.config_path)
+            state = load_state(config.state_path) or state
+            process_telegram_commands(config, state)
+            state = load_state(config.state_path) or state
+            active_config = apply_runtime_state(config, state)
+
+            if forwarding_suppressed(state):
+                mark_sources_seen(active_config, state)
+                time.sleep(active_config.poll_interval_seconds)
+                continue
+
+            if active_config.watch_messages:
+                rows = fetch_messages_after(active_config, int(state.get("messages_last_rowid", 0)))
                 if rows:
-                    forward_rows(config, rows, state, dry_run=dry_run)
-            if config.watch_notifications:
+                    forward_rows(active_config, rows, state, dry_run=dry_run)
+            if active_config.watch_notifications:
                 notifications = fetch_notifications_after(
-                    config,
+                    active_config,
                     int(state.get("notifications_last_rec_id", 0)),
                 )
                 if notifications:
-                    forward_notifications(config, notifications, state, dry_run=dry_run)
-            if not config.watch_messages and not config.watch_notifications:
+                    forward_notifications(active_config, notifications, state, dry_run=dry_run)
+            if not active_config.watch_messages and not active_config.watch_notifications:
                 logging.warning("Both WATCH_MESSAGES and WATCH_NOTIFICATIONS are disabled")
             else:
-                state = load_state(config.state_path) or state
+                state = load_state(active_config.state_path) or state
         except KeyboardInterrupt:
             raise
         except Exception:

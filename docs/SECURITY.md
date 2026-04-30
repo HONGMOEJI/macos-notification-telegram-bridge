@@ -90,6 +90,8 @@ Consider these risks:
 - Full Disk Access는 실행 주체에 넓은 로컬 읽기 권한을 부여합니다.
 - Notification Center parsing may capture sensitive alerts from unrelated apps if allowlists are not used.
 - allowlist 없이 Notification Center를 켜면 관련 없는 앱의 민감한 알림도 잡힐 수 있습니다.
+- Bot commands can control forwarding, so keep `TELEGRAM_CHAT_ID` and `BOT_ALLOWED_CHAT_IDS` narrow.
+- 봇 명령어가 전달 상태를 제어하므로 `TELEGRAM_CHAT_ID`와 `BOT_ALLOWED_CHAT_IDS`를 좁게 유지하세요.
 
 ## Reporting Issues / 이슈 제보
 
