@@ -90,7 +90,7 @@ If `WATCH_MESSAGES=1` and `WATCH_NOTIFICATIONS=1`, the same iMessage or SMS can 
 `WATCH_MESSAGES=1`과 `WATCH_NOTIFICATIONS=1`을 같이 켜면 같은 iMessage 또는 SMS가 `chat.db`와 Notification Center에서 한 번씩 잡힐 수 있습니다. Messages 번들 ID를 `NOTIFICATION_APP_DENYLIST`에 유지하세요.
 
 ```env
-NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat
+NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram
 ```
 
 ## LaunchAgent is not running / LaunchAgent가 실행되지 않음

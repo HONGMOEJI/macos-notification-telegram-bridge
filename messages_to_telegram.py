@@ -229,7 +229,12 @@ def load_config(config_path: Path) -> Config:
         service_allowlist=normalize_filter(parse_csv(raw.get("SERVICE_ALLOWLIST"))),
         notification_app_allowlist=normalize_filter(parse_csv(raw.get("NOTIFICATION_APP_ALLOWLIST"))),
         notification_app_denylist=normalize_filter(
-            parse_csv(raw.get("NOTIFICATION_APP_DENYLIST", "com.apple.MobileSMS,com.apple.iChat"))
+            parse_csv(
+                raw.get(
+                    "NOTIFICATION_APP_DENYLIST",
+                    "com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram",
+                )
+            )
         ),
         notification_presented_only=parse_bool(raw.get("NOTIFICATION_PRESENTED_ONLY"), False),
         notification_text_mode=raw.get("NOTIFICATION_TEXT_MODE", "full").strip().lower(),

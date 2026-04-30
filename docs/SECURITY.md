@@ -73,7 +73,7 @@ For a low-noise notification setup:
 WATCH_MESSAGES=1
 WATCH_NOTIFICATIONS=1
 NOTIFICATION_APP_ALLOWLIST=com.apple.mail,com.tinyspeck.slackmacgap
-NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat
+NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram
 ```
 
 ## Threat Model / 위협 모델

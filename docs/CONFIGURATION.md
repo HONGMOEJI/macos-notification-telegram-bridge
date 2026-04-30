@@ -176,12 +176,16 @@ Default:
 기본값:
 
 ```env
-NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat
+NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram
 ```
 
 Skip matching bundle IDs.
 
 일치하는 번들 ID를 제외합니다.
+
+Telegram bundle IDs are included by default to avoid forwarding loops.
+
+Telegram으로 보낸 메시지가 다시 Telegram 알림으로 들어와 재전송되는 루프를 막기 위해 Telegram 번들 ID를 기본 제외합니다.
 
 ### `NOTIFICATION_PRESENTED_ONLY`
 

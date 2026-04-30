@@ -126,7 +126,7 @@ To avoid duplicate iMessage/SMS forwarding, Messages bundle IDs are denied by de
 iMessage/SMS 중복 전달을 피하려고 Notification Center 쪽에서는 Messages 관련 번들 ID를 기본 제외합니다.
 
 ```env
-NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat
+NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram
 ```
 
 Notification Center support is best-effort because Apple does not provide a public API for subscribing to all app notifications.
