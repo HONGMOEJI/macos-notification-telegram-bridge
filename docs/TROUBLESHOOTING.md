@@ -93,6 +93,20 @@ If `WATCH_MESSAGES=1` and `WATCH_NOTIFICATIONS=1`, the same iMessage or SMS can 
 NOTIFICATION_APP_DENYLIST=com.apple.MobileSMS,com.apple.iChat,com.tdesktop.telegram,org.telegram.desktop,ru.keepcoder.Telegram
 ```
 
+## Parcel Tracking Fails / 택배 조회 실패
+
+Parcel tracking uses Naver search's web UI and internal JSON response. If `/parcelcheck` starts failing with a key or response error, restart the bridge first so it can scrape a fresh Naver request key.
+
+택배 조회는 네이버 검색 웹 UI와 내부 JSON 응답을 사용합니다. `/parcelcheck`가 키 오류 또는 응답 오류로 실패하면 먼저 브리지를 재시작해 새 네이버 요청 키를 스크래핑하게 하세요.
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.codex.messages-to-telegram"
+```
+
+If Naver changed the page or blocked automated requests, the `naver_scrape` provider may need a code update.
+
+네이버가 페이지를 바꾸거나 자동 요청을 차단하면 `naver_scrape` provider 코드 수정이 필요할 수 있습니다.
+
 ## LaunchAgent is not running / LaunchAgent가 실행되지 않음
 
 Inspect logs:

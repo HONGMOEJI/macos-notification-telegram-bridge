@@ -74,6 +74,19 @@ Parsed notification keys:
 - `req.iden` -> identifier
 - `app` or app table identifier -> app identity
 
+### Parcel Tracking / 택배 조회
+
+- Provider: `naver_scrape`
+- 제공자: `naver_scrape`
+- Registered parcels are stored in `~/Library/Application Support/messages-to-telegram/parcels.json`
+- 등록한 택배는 `~/Library/Application Support/messages-to-telegram/parcels.json`에 저장됩니다.
+- Polling key: per-parcel `last_signature`
+- 폴링 기준: 택배별 `last_signature`
+- Default interval: `3600` seconds
+- 기본 간격: `3600`초
+- Request path: Naver search parcel tracking page plus `ts-proxy.naver.com` JSON response
+- 요청 경로: 네이버 검색 택배조회 페이지와 `ts-proxy.naver.com` JSON 응답
+
 ## Timing Model / 타이밍 모델
 
 Messages:
@@ -91,6 +104,13 @@ Notification Center:
 - macOS가 알림을 전달하거나 저장할 때 notification record를 씁니다.
 - Timing and persistence are controlled by macOS and may vary across versions.
 - 저장 시점과 보존 방식은 macOS 버전에 따라 달라질 수 있습니다.
+
+Parcels:
+
+- The bridge checks registered active parcels at most once per `PARCEL_POLL_INTERVAL_SECONDS`.
+- 브리지는 등록된 활성 택배를 `PARCEL_POLL_INTERVAL_SECONDS`마다 최대 한 번 조회합니다.
+- A Telegram message is sent only when the latest parcel signature changes after the initial registration/check.
+- 최초 등록/조회 이후 택배 상태 signature가 바뀐 경우에만 Telegram 메시지를 보냅니다.
 
 ## State Model / 상태 모델
 
@@ -176,6 +196,8 @@ Full reference: [CONFIGURATION.md](CONFIGURATION.md)
 - macOS 개인정보 보호 권한이 데이터베이스 접근을 막을 수 있습니다.
 - Notification Center parsing can break after macOS updates.
 - macOS 업데이트 후 Notification Center 파싱이 깨질 수 있습니다.
+- Naver parcel scraping can break if Naver changes its page, request key, or response format.
+- 네이버 택배조회 스크래핑은 네이버가 페이지, 요청 키, 응답 형식을 바꾸면 깨질 수 있습니다.
 - Telegram bot messages are visible to Telegram infrastructure and chat members.
 - Telegram bot 메시지는 Telegram 인프라와 해당 채팅 구성원에게 보일 수 있습니다.
 

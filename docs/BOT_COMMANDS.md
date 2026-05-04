@@ -192,6 +192,70 @@ Returns top news plus the configured stock watchlist.
 STOCK_WATCHLIST=^GSPC,^IXIC,AAPL,NVDA,005930.KS
 ```
 
+## Parcels / 택배
+
+```text
+/parcelon
+/parceloff
+```
+
+Enable or disable hourly parcel polling at runtime.
+
+택배 주기 조회를 런타임에서 켜고 끕니다. 등록된 택배가 없으면 네트워크 조회도 하지 않습니다.
+
+```text
+/parceladd
+```
+
+Register a parcel by carrier name or Naver carrier code, invoice number, and optional label. Example usage: `/parceladd CJ대한통운 1234567890 키보드`.
+
+택배사 이름 또는 네이버 택배사 코드, 운송장 번호, 선택 라벨로 택배를 등록합니다. 사용 예시는 `/parceladd CJ대한통운 1234567890 키보드`입니다.
+
+```text
+/parcels
+```
+
+Show registered parcels, their IDs, current state, and last status.
+
+등록된 택배의 ID, 활성 상태, 마지막 조회 상태를 보여줍니다.
+
+```text
+/parcelcheck
+```
+
+Immediately check all parcels or one selected parcel. Example usage: `/parcelcheck`, `/parcelcheck 04:1234567890`.
+
+모든 택배 또는 선택한 택배를 즉시 조회합니다. 사용 예시는 `/parcelcheck`, `/parcelcheck 04:1234567890`입니다.
+
+```text
+/parcelremove
+```
+
+Remove a registered parcel. Example usage: `/parcelremove 04:1234567890`.
+
+등록한 택배를 삭제합니다. 사용 예시는 `/parcelremove 04:1234567890`입니다.
+
+```text
+/parcelpause
+/parcelresume
+```
+
+Pause or resume polling for one registered parcel. Example usage: `/parcelpause 04:1234567890`.
+
+특정 택배의 주기 조회만 멈추거나 다시 켭니다. 사용 예시는 `/parcelpause 04:1234567890`입니다.
+
+```text
+/parcelcarriers
+```
+
+Show Naver carrier codes. Example usage: `/parcelcarriers`, `/parcelcarriers cj`.
+
+네이버 택배사 코드를 보여줍니다. 사용 예시는 `/parcelcarriers`, `/parcelcarriers cj`입니다.
+
+Parcel tracking uses Naver search's parcel tracking web path and an internal JSON response. It is convenient and keyless, but it may break if Naver changes the page, request key, or response shape.
+
+택배 조회는 네이버 검색의 택배조회 웹 경로와 내부 JSON 응답을 사용합니다. 별도 키 없이 편하지만, 네이버가 페이지, 요청 키, 응답 형식을 바꾸면 깨질 수 있습니다.
+
 ## Utility / 유틸
 
 ```text

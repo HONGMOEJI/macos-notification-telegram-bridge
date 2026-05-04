@@ -60,11 +60,21 @@ User-local configuration file. It contains Telegram credentials and privacy cont
 
 English:
 
-User-local state file. It stores the last seen Messages `ROWID` and Notification Center `rec_id`.
+User-local state file. It stores the last seen Messages `ROWID`, Notification Center `rec_id`, Telegram command offset, and cached Naver parcel request key.
 
 한국어:
 
-사용자 로컬 상태 파일입니다. 마지막으로 본 Messages `ROWID`와 Notification Center `rec_id`를 저장합니다.
+사용자 로컬 상태 파일입니다. 마지막으로 본 Messages `ROWID`, Notification Center `rec_id`, Telegram 명령 offset, 캐시된 네이버 택배조회 요청 키를 저장합니다.
+
+### `parcels.json`
+
+English:
+
+User-editable parcel registry. Each record stores carrier code, invoice number, label, active flag, and the last observed delivery signature.
+
+한국어:
+
+사용자가 수정할 수 있는 택배 등록 파일입니다. 각 항목은 택배사 코드, 운송장 번호, 라벨, 활성 여부, 마지막으로 관측한 배송 signature를 저장합니다.
 
 ### LaunchAgent
 
@@ -92,6 +102,8 @@ Reasons:
 - 폴링은 검토와 디버깅이 쉽습니다.
 - The workload is tiny for personal use.
 - 개인 사용량에서는 부하가 작습니다.
+- Parcel tracking is rate-limited separately by `PARCEL_POLL_INTERVAL_SECONDS`, defaulting to one hour.
+- 택배 조회는 `PARCEL_POLL_INTERVAL_SECONDS`로 별도 제한하며 기본값은 1시간입니다.
 
 ## Failure Handling / 실패 처리
 

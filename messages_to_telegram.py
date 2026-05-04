@@ -35,6 +35,7 @@ DEFAULT_APP_DIR = Path.home() / "Library" / "Application Support" / APP_NAME
 DEFAULT_CONFIG_PATH = DEFAULT_APP_DIR / "config.env"
 DEFAULT_STATE_PATH = DEFAULT_APP_DIR / "state.json"
 DEFAULT_APP_MAP_PATH = DEFAULT_APP_DIR / "app_map.json"
+DEFAULT_PARCELS_PATH = DEFAULT_APP_DIR / "parcels.json"
 DEFAULT_MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
 DEFAULT_NOTIFICATION_DB = (
     Path.home() / "Library" / "Group Containers" / "group.com.apple.usernoted" / "db2" / "db"
@@ -45,10 +46,80 @@ HTTP_USER_AGENT = "messages-to-telegram/0.1"
 DEFAULT_NEWS_LANGUAGE = "ko"
 DEFAULT_NEWS_COUNTRY = "KR"
 DEFAULT_STOCK_WATCHLIST = "^GSPC,^IXIC,AAPL,NVDA,005930.KS"
+DEFAULT_PARCEL_PROVIDER = "naver_scrape"
+DEFAULT_PARCEL_POLL_INTERVAL_SECONDS = 3600
+DEFAULT_NAVER_PARCEL_SEARCH_URL = (
+    "https://search.naver.com/search.naver?query=%ED%83%9D%EB%B0%B0%EC%A1%B0%ED%9A%8C"
+)
+NAVER_PARCEL_API_URL = "https://ts-proxy.naver.com/ocontent/util/headerjson.naver"
+NAVER_PARCEL_CARRIERS = {
+    "04": "CJ대한통운",
+    "01": "우체국택배",
+    "05": "한진택배",
+    "08": "롯데택배",
+    "06": "로젠택배",
+    "54": "홈픽",
+    "24": "GS25편의점택배",
+    "46": "CU 편의점택배",
+    "23": "경동택배",
+    "22": "대신택배",
+    "11": "일양로지스",
+    "32": "합동택배",
+    "18": "건영택배",
+    "17": "천일택배",
+    "20": "한진택배B2B",
+    "16": "한의사랑택배",
+    "12": "EMS",
+    "25": "TNT Express",
+    "14": "UPS",
+    "21": "FedEx",
+    "26": "USPS",
+    "45": "우리택배(구호남택배)",
+    "44": "SLX택배",
+    "47": "우리한방택배",
+    "53": "농협택배",
+    "94": "카카오T당일배송",
+    "92": "지니고 당일배송",
+    "101": "한샘서비스 택배",
+    "173": "물류대장(택배)",
+    "189": "세븐일레븐 착한택배",
+}
+NAVER_PARCEL_CARRIER_ALIASES = {
+    "cj": "04",
+    "cj대한통운": "04",
+    "대한통운": "04",
+    "우체국": "01",
+    "epost": "01",
+    "한진": "05",
+    "롯데": "08",
+    "롯데글로벌로지스": "08",
+    "로젠": "06",
+    "logen": "06",
+    "홈픽": "54",
+    "gs25": "24",
+    "cu": "46",
+    "경동": "23",
+    "대신": "22",
+    "일양": "11",
+    "합동": "32",
+    "건영": "18",
+    "천일": "17",
+    "ems": "12",
+    "tnt": "25",
+    "ups": "14",
+    "fedex": "21",
+    "페덱스": "21",
+    "usps": "26",
+    "우리": "45",
+    "slx": "44",
+    "농협": "53",
+    "카카오": "94",
+}
 
 ENV_KEYS = {
     "WATCH_MESSAGES",
     "WATCH_NOTIFICATIONS",
+    "WATCH_PARCELS",
     "BOT_COMMANDS_ENABLED",
     "BOT_ALLOWED_CHAT_IDS",
     "TELEGRAM_BOT_TOKEN",
@@ -56,8 +127,10 @@ ENV_KEYS = {
     "MESSAGES_DB_PATH",
     "NOTIFICATION_DB_PATH",
     "APP_MAP_PATH",
+    "PARCELS_PATH",
     "STATE_PATH",
     "POLL_INTERVAL_SECONDS",
+    "PARCEL_POLL_INTERVAL_SECONDS",
     "BATCH_LIMIT",
     "FORWARD_INCOMING_ONLY",
     "FORWARD_EMPTY_MESSAGES",
@@ -75,6 +148,9 @@ ENV_KEYS = {
     "NEWS_LANGUAGE",
     "NEWS_COUNTRY",
     "STOCK_WATCHLIST",
+    "PARCEL_PROVIDER",
+    "NAVER_PARCEL_PASSPORT_KEY",
+    "NAVER_PARCEL_SEARCH_URL",
     "LOG_LEVEL",
 }
 
@@ -107,6 +183,7 @@ class Config:
     config_path: Path
     watch_messages: bool
     watch_notifications: bool
+    watch_parcels: bool
     bot_commands_enabled: bool
     bot_allowed_chat_ids: tuple[str, ...]
     telegram_bot_token: str
@@ -114,8 +191,10 @@ class Config:
     messages_db_path: Path
     notification_db_path: Path
     app_map_path: Path
+    parcels_path: Path
     state_path: Path
     poll_interval_seconds: float
+    parcel_poll_interval_seconds: float
     batch_limit: int
     forward_incoming_only: bool
     forward_empty_messages: bool
@@ -133,6 +212,9 @@ class Config:
     news_language: str
     news_country: str
     stock_watchlist: tuple[str, ...]
+    parcel_provider: str
+    naver_parcel_passport_key: str
+    naver_parcel_search_url: str
     log_level: str
 
 
@@ -172,6 +254,50 @@ class NotificationRow:
     @property
     def parsed(self) -> dict[str, Any]:
         return parse_notification_blob(self.data_blob)
+
+
+@dataclass(frozen=True)
+class ParcelTrackingEvent:
+    time_text: str
+    location: str
+    status: str
+    raw_time: int | float | None = None
+
+
+@dataclass(frozen=True)
+class ParcelTrackingResult:
+    carrier_code: str
+    carrier_name: str
+    invoice: str
+    status: str
+    complete: bool
+    events: tuple[ParcelTrackingEvent, ...]
+    estimate: str | None
+    checked_at: str
+    raw: dict[str, Any]
+
+    @property
+    def latest_event(self) -> ParcelTrackingEvent | None:
+        return self.events[-1] if self.events else None
+
+    @property
+    def signature(self) -> str:
+        latest = self.latest_event
+        return json.dumps(
+            {
+                "status": self.status,
+                "complete": self.complete,
+                "estimate": self.estimate or "",
+                "event_count": len(self.events),
+                "latest": {
+                    "time": latest.time_text if latest else "",
+                    "where": latest.location if latest else "",
+                    "kind": latest.status if latest else "",
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
 
 def expand_path(value: str | Path) -> Path:
@@ -233,6 +359,7 @@ def load_config(config_path: Path) -> Config:
         config_path=config_path,
         watch_messages=parse_bool(raw.get("WATCH_MESSAGES"), True),
         watch_notifications=parse_bool(raw.get("WATCH_NOTIFICATIONS"), False),
+        watch_parcels=parse_bool(raw.get("WATCH_PARCELS"), True),
         bot_commands_enabled=parse_bool(raw.get("BOT_COMMANDS_ENABLED"), True),
         bot_allowed_chat_ids=parse_csv(raw.get("BOT_ALLOWED_CHAT_IDS")),
         telegram_bot_token=token,
@@ -242,8 +369,13 @@ def load_config(config_path: Path) -> Config:
             raw.get("NOTIFICATION_DB_PATH", str(detect_notification_db_path()))
         ),
         app_map_path=expand_path(raw.get("APP_MAP_PATH", str(DEFAULT_APP_MAP_PATH))),
+        parcels_path=expand_path(raw.get("PARCELS_PATH", str(DEFAULT_PARCELS_PATH))),
         state_path=expand_path(raw.get("STATE_PATH", str(DEFAULT_STATE_PATH))),
         poll_interval_seconds=float(raw.get("POLL_INTERVAL_SECONDS", "5")),
+        parcel_poll_interval_seconds=max(
+            60.0,
+            float(raw.get("PARCEL_POLL_INTERVAL_SECONDS", str(DEFAULT_PARCEL_POLL_INTERVAL_SECONDS))),
+        ),
         batch_limit=max(1, int(raw.get("BATCH_LIMIT", "20"))),
         forward_incoming_only=parse_bool(raw.get("FORWARD_INCOMING_ONLY"), True),
         forward_empty_messages=parse_bool(raw.get("FORWARD_EMPTY_MESSAGES"), False),
@@ -268,6 +400,14 @@ def load_config(config_path: Path) -> Config:
         news_language=raw.get("NEWS_LANGUAGE", DEFAULT_NEWS_LANGUAGE).strip() or DEFAULT_NEWS_LANGUAGE,
         news_country=raw.get("NEWS_COUNTRY", DEFAULT_NEWS_COUNTRY).strip().upper() or DEFAULT_NEWS_COUNTRY,
         stock_watchlist=parse_csv(raw.get("STOCK_WATCHLIST", DEFAULT_STOCK_WATCHLIST)),
+        parcel_provider=raw.get("PARCEL_PROVIDER", DEFAULT_PARCEL_PROVIDER).strip().lower()
+        or DEFAULT_PARCEL_PROVIDER,
+        naver_parcel_passport_key=raw.get("NAVER_PARCEL_PASSPORT_KEY", "").strip(),
+        naver_parcel_search_url=raw.get(
+            "NAVER_PARCEL_SEARCH_URL",
+            DEFAULT_NAVER_PARCEL_SEARCH_URL,
+        ).strip()
+        or DEFAULT_NAVER_PARCEL_SEARCH_URL,
         log_level=raw.get("LOG_LEVEL", "INFO").strip().upper(),
     )
 
@@ -410,6 +550,79 @@ def save_app_map(path: Path, app_map: dict[str, str]) -> None:
         encoding="utf-8",
     )
     os.replace(tmp, path)
+
+
+def load_parcels(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logging.warning("Invalid parcels JSON: %s", path)
+        return []
+    if isinstance(raw, dict):
+        raw_parcels = raw.get("parcels", [])
+    else:
+        raw_parcels = raw
+    if not isinstance(raw_parcels, list):
+        return []
+    return [item for item in raw_parcels if isinstance(item, dict)]
+
+
+def save_parcels(path: Path, parcels: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps({"parcels": parcels}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def normalize_parcel_invoice(invoice: str) -> str:
+    return re.sub(r"[\s-]+", "", invoice.strip())
+
+
+def normalize_carrier_token(value: str) -> str:
+    return re.sub(r"[\s_()（）/.-]+", "", value.strip().lower()).replace("택배", "")
+
+
+def resolve_parcel_carrier(value: str) -> tuple[str, str] | None:
+    raw = value.strip()
+    if raw in NAVER_PARCEL_CARRIERS:
+        return raw, NAVER_PARCEL_CARRIERS[raw]
+
+    normalized = normalize_carrier_token(raw)
+    alias_code = NAVER_PARCEL_CARRIER_ALIASES.get(normalized)
+    if alias_code:
+        return alias_code, NAVER_PARCEL_CARRIERS[alias_code]
+
+    for code, name in NAVER_PARCEL_CARRIERS.items():
+        if normalized in {normalize_carrier_token(name), normalize_carrier_token(code)}:
+            return code, name
+    for code, name in NAVER_PARCEL_CARRIERS.items():
+        if normalized and normalized in normalize_carrier_token(name):
+            return code, name
+    return None
+
+
+def parcel_record_id(carrier_code: str, invoice: str) -> str:
+    return f"{carrier_code}:{normalize_parcel_invoice(invoice)}"
+
+
+def select_parcel_records(parcels: list[dict[str, Any]], selector: str | None) -> list[dict[str, Any]]:
+    if not selector or selector.lower() == "all":
+        return parcels
+    needle = selector.strip().lower()
+    normalized_invoice = normalize_parcel_invoice(selector).lower()
+    return [
+        parcel
+        for parcel in parcels
+        if needle == str(parcel.get("id", "")).lower()
+        or normalized_invoice == str(parcel.get("invoice", "")).lower()
+        or needle in str(parcel.get("label", "")).lower()
+        or needle in str(parcel.get("carrier_name", "")).lower()
+    ]
 
 
 def app_display_name(config: Config, bundle_id: str | None, app_map: dict[str, str] | None = None) -> str:
@@ -1000,8 +1213,11 @@ def curl_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def http_get_bytes(url: str, timeout: int = 20) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
+def http_get_bytes(url: str, timeout: int = 20, headers: dict[str, str] | None = None) -> bytes:
+    request_headers = {"User-Agent": HTTP_USER_AGENT}
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(url, headers=request_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.read()
@@ -1013,7 +1229,7 @@ def http_get_bytes(url: str, timeout: int = 20) -> bytes:
     if not Path(curl_path).exists():
         raise RuntimeError("Python TLS verification failed and /usr/bin/curl is not available")
     proc = subprocess.run(
-        [curl_path, "-fsSL", "--max-time", str(timeout), "-A", HTTP_USER_AGENT, url],
+        build_curl_get_command(url, timeout, request_headers),
         text=False,
         capture_output=True,
         check=False,
@@ -1025,8 +1241,16 @@ def http_get_bytes(url: str, timeout: int = 20) -> bytes:
     return proc.stdout
 
 
-def http_get_json(url: str, timeout: int = 20) -> Any:
-    return json.loads(http_get_bytes(url, timeout=timeout).decode("utf-8"))
+def build_curl_get_command(url: str, timeout: int, headers: dict[str, str]) -> list[str]:
+    command = ["/usr/bin/curl", "-fsSL", "--max-time", str(timeout)]
+    for key, value in headers.items():
+        command.extend(["-H", f"{key}: {value}"])
+    command.append(url)
+    return command
+
+
+def http_get_json(url: str, timeout: int = 20, headers: dict[str, str] | None = None) -> Any:
+    return json.loads(http_get_bytes(url, timeout=timeout, headers=headers).decode("utf-8"))
 
 
 def send_telegram_message(config: Config, text: str) -> None:
@@ -1224,6 +1448,8 @@ def apply_runtime_state(config: Config, state: dict[str, Any]) -> Config:
         updates["watch_messages"] = bool(state["runtime_watch_messages"])
     if "runtime_watch_notifications" in state:
         updates["watch_notifications"] = bool(state["runtime_watch_notifications"])
+    if "runtime_watch_parcels" in state:
+        updates["watch_parcels"] = bool(state["runtime_watch_parcels"])
     if state.get("runtime_message_text_mode"):
         updates["message_text_mode"] = str(state["runtime_message_text_mode"])
     if state.get("runtime_notification_text_mode"):
@@ -1372,6 +1598,209 @@ def format_stock_quotes(symbols: Iterable[str]) -> str:
     return trim_telegram_text("\n".join(lines))
 
 
+def get_naver_parcel_passport_key(config: Config, state: dict[str, Any], force_refresh: bool = False) -> str:
+    if config.naver_parcel_passport_key and not force_refresh:
+        return urllib.parse.unquote(config.naver_parcel_passport_key)
+
+    cached_key = str(state.get("naver_parcel_passport_key", ""))
+    cached_until = parse_iso_datetime(state.get("naver_parcel_passport_key_expires_at"))
+    if (
+        cached_key
+        and not force_refresh
+        and cached_until
+        and cached_until > dt.datetime.now(dt.timezone.utc)
+    ):
+        return cached_key
+
+    html_text = http_get_bytes(
+        config.naver_parcel_search_url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://www.naver.com/",
+        },
+    ).decode("utf-8", errors="replace")
+    match = re.search(r'"passportKey"\s*:\s*"([^"]+)"', html_text)
+    if not match:
+        raise RuntimeError("네이버 택배조회 passportKey를 찾지 못했습니다.")
+
+    key = urllib.parse.unquote(match.group(1))
+    state["naver_parcel_passport_key"] = key
+    state["naver_parcel_passport_key_expires_at"] = (
+        dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=6)
+    ).isoformat()
+    return key
+
+
+def fetch_parcel_tracking(
+    config: Config,
+    state: dict[str, Any],
+    carrier_code: str,
+    invoice: str,
+    force_key_refresh: bool = False,
+) -> ParcelTrackingResult:
+    if config.parcel_provider != DEFAULT_PARCEL_PROVIDER:
+        raise RuntimeError(f"지원하지 않는 PARCEL_PROVIDER입니다: {config.parcel_provider}")
+
+    normalized_invoice = normalize_parcel_invoice(invoice)
+    passport_key = get_naver_parcel_passport_key(config, state, force_refresh=force_key_refresh)
+    params = {
+        "callapi": "parceltracking",
+        "t_code": carrier_code,
+        "t_invoice": normalized_invoice,
+        "passportKey": passport_key,
+    }
+    url = NAVER_PARCEL_API_URL + "?" + urllib.parse.urlencode(params)
+    data = http_get_json(
+        url,
+        headers={
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": config.naver_parcel_search_url,
+            "Origin": "https://search.naver.com",
+        },
+    )
+
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, dict) and "유효한 키" in str(message.get("error", "")) and not force_key_refresh:
+            return fetch_parcel_tracking(config, state, carrier_code, normalized_invoice, force_key_refresh=True)
+
+    return parse_naver_parcel_tracking(data, carrier_code, normalized_invoice)
+
+
+def parse_naver_parcel_tracking(data: Any, carrier_code: str, invoice: str) -> ParcelTrackingResult:
+    if not isinstance(data, dict):
+        raise RuntimeError("네이버 택배조회 응답이 JSON 객체가 아닙니다.")
+
+    message = data.get("message")
+    if isinstance(message, dict) and message.get("error"):
+        raise RuntimeError(str(message["error"]))
+
+    tracking_info = data.get("tracking_info")
+    if isinstance(tracking_info, dict) and tracking_info.get("ErrorMsg"):
+        code = tracking_info.get("ErrorCode")
+        detail = f" ({code})" if code else ""
+        raise RuntimeError(f"{tracking_info['ErrorMsg']}{detail}")
+
+    raw_events = data.get("trackingDetails") or []
+    events = []
+    if isinstance(raw_events, list):
+        for item in raw_events:
+            if not isinstance(item, dict):
+                continue
+            time_text = str(item.get("timeString") or item.get("date") or item.get("time") or "").strip()
+            events.append(
+                ParcelTrackingEvent(
+                    time_text=time_text,
+                    location=str(item.get("where") or "").strip(),
+                    status=str(item.get("kind") or "").strip(),
+                    raw_time=item.get("time") if isinstance(item.get("time"), (int, float)) else None,
+                )
+            )
+
+    latest = events[-1] if events else None
+    status = latest.status if latest and latest.status else ""
+    if not status and parse_bool(data.get("complete")):
+        status = "배송완료"
+    if not status:
+        status = "조회됨" if data.get("result") == "Y" else "조회 결과 없음"
+
+    return ParcelTrackingResult(
+        carrier_code=carrier_code,
+        carrier_name=NAVER_PARCEL_CARRIERS.get(carrier_code, carrier_code),
+        invoice=str(data.get("invoiceNo") or invoice),
+        status=status,
+        complete=parse_bool(data.get("complete")) or str(data.get("completeYN", "")).upper() == "Y",
+        events=tuple(events),
+        estimate=str(data.get("estimate")).strip() if data.get("estimate") else None,
+        checked_at=iso_now(),
+        raw=data,
+    )
+
+
+def apply_parcel_result(record: dict[str, Any], result: ParcelTrackingResult) -> bool:
+    previous_signature = str(record.get("last_signature") or "")
+    record["carrier_code"] = result.carrier_code
+    record["carrier_name"] = result.carrier_name
+    record["invoice"] = result.invoice
+    record["last_checked_at"] = result.checked_at
+    record["last_status"] = result.status
+    record["last_signature"] = result.signature
+    record["last_error"] = ""
+    record["complete"] = result.complete
+    latest = result.latest_event
+    if latest:
+        record["last_event_time"] = latest.time_text
+        record["last_event_location"] = latest.location
+    return bool(previous_signature and previous_signature != result.signature)
+
+
+def format_parcel_tracking(
+    record: dict[str, Any],
+    result: ParcelTrackingResult,
+    title: str = "택배 조회",
+) -> str:
+    label = str(record.get("label") or "").strip()
+    latest = result.latest_event
+    lines = [
+        title,
+        f"ID: {record.get('id') or parcel_record_id(result.carrier_code, result.invoice)}",
+        f"택배사: {result.carrier_name} ({result.carrier_code})",
+        f"운송장: {result.invoice}",
+        f"상태: {result.status}",
+    ]
+    if label:
+        lines.append(f"라벨: {label}")
+    if latest:
+        if latest.time_text:
+            lines.append(f"시간: {latest.time_text}")
+        if latest.location:
+            lines.append(f"위치: {latest.location}")
+    if result.estimate:
+        lines.append(f"예상: {result.estimate}")
+    lines.append(f"배송완료: {'yes' if result.complete else 'no'}")
+
+    if result.events:
+        lines.append("\n최근 이력")
+        for event in result.events[-5:]:
+            parts = [part for part in [event.time_text, event.location, event.status] if part]
+            lines.append("- " + " | ".join(parts))
+    return trim_telegram_text("\n".join(lines))
+
+
+def format_parcels(config: Config) -> str:
+    parcels = load_parcels(config.parcels_path)
+    if not parcels:
+        return f"등록된 택배가 없습니다.\n추가: /parceladd CJ대한통운 1234567890 책"
+    lines = [f"등록 택배 목록\n파일: {config.parcels_path}"]
+    for parcel in parcels:
+        active = "on" if parcel.get("active", True) else "off"
+        done = "done" if parcel.get("complete") else "open"
+        label = f" / {parcel.get('label')}" if parcel.get("label") else ""
+        status = parcel.get("last_status") or parcel.get("last_error") or "not checked"
+        lines.append(
+            "\n"
+            f"{parcel.get('id')}\n"
+            f"{parcel.get('carrier_name')} {parcel.get('invoice')}{label}\n"
+            f"{active}, {done}, {status}"
+        )
+    return trim_telegram_text("\n".join(lines))
+
+
+def format_parcel_carriers(query: str | None = None) -> str:
+    items = sorted(NAVER_PARCEL_CARRIERS.items(), key=lambda item: int(item[0]) if item[0].isdigit() else 999)
+    if query:
+        needle = normalize_carrier_token(query)
+        items = [
+            item for item in items if needle in normalize_carrier_token(item[0]) or needle in normalize_carrier_token(item[1])
+        ]
+    if not items:
+        return "택배사 검색 결과가 없습니다."
+    lines = ["지원 택배사 코드"]
+    for code, name in items[:60]:
+        lines.append(f"{code}: {name}")
+    return trim_telegram_text("\n".join(lines))
+
+
 def format_notification_list(config: Config, app_filter: str | None, limit: int) -> str:
     notifications = fetch_recent_notifications(config, limit=limit, app_filter=app_filter)
     title = "최근 알림 목록" if not app_filter else f"최근 알림 목록: {app_filter}"
@@ -1460,6 +1889,124 @@ def format_brief(config: Config) -> str:
     return trim_telegram_text(("\n\n" + ("=" * 24) + "\n\n").join(sections))
 
 
+def handle_parcel_add_command(config: Config, state: dict[str, Any], args: list[str]) -> str:
+    if len(args) < 2:
+        return "사용법: /parceladd <택배사|코드> <운송장번호> [라벨]\n예: /parceladd CJ대한통운 1234567890 키보드"
+
+    resolved = resolve_parcel_carrier(args[0])
+    if not resolved:
+        return "택배사를 찾지 못했습니다. /parcelcarriers 로 코드를 확인해주세요."
+    carrier_code, carrier_name = resolved
+    invoice = normalize_parcel_invoice(args[1])
+    if not invoice:
+        return "운송장번호가 비어 있습니다."
+
+    label = " ".join(args[2:]).strip()
+    record_id = parcel_record_id(carrier_code, invoice)
+    parcels = load_parcels(config.parcels_path)
+    record = next((item for item in parcels if item.get("id") == record_id), None)
+    if record is None:
+        record = {
+            "id": record_id,
+            "carrier_code": carrier_code,
+            "carrier_name": carrier_name,
+            "invoice": invoice,
+            "label": label,
+            "active": True,
+            "created_at": iso_now(),
+        }
+        parcels.append(record)
+    else:
+        record.update(
+            {
+                "carrier_code": carrier_code,
+                "carrier_name": carrier_name,
+                "invoice": invoice,
+                "label": label or record.get("label", ""),
+                "active": True,
+            }
+        )
+
+    try:
+        result = fetch_parcel_tracking(config, state, carrier_code, invoice)
+        apply_parcel_result(record, result)
+        response = format_parcel_tracking(record, result, title="택배 등록 완료")
+    except Exception as exc:
+        record["last_checked_at"] = iso_now()
+        record["last_error"] = str(exc)
+        response = (
+            "택배를 등록했습니다.\n"
+            f"ID: {record_id}\n"
+            f"택배사: {carrier_name} ({carrier_code})\n"
+            f"운송장: {invoice}\n"
+            f"현재 조회 실패: {exc}\n\n"
+            "아직 운송장이 등록 전이면 나중에 주기 조회에서 잡힐 수 있습니다."
+        )
+
+    save_parcels(config.parcels_path, parcels)
+    return response
+
+
+def handle_parcel_check_command(config: Config, state: dict[str, Any], args: list[str]) -> str:
+    parcels = load_parcels(config.parcels_path)
+    if not parcels:
+        return "등록된 택배가 없습니다. /parceladd 로 먼저 추가해주세요."
+
+    selector = args[0] if args else "all"
+    selected = select_parcel_records(parcels, selector)
+    if not selected:
+        return f"해당 택배를 찾지 못했습니다: {selector}"
+
+    responses = []
+    for record in selected[:10]:
+        try:
+            result = fetch_parcel_tracking(
+                config,
+                state,
+                str(record.get("carrier_code", "")),
+                str(record.get("invoice", "")),
+            )
+            changed = apply_parcel_result(record, result)
+            title = "택배 즉시조회" + (" - 변경됨" if changed else "")
+            responses.append(format_parcel_tracking(record, result, title=title))
+        except Exception as exc:
+            record["last_checked_at"] = iso_now()
+            record["last_error"] = str(exc)
+            responses.append(f"택배 즉시조회 실패\nID: {record.get('id')}\n오류: {exc}")
+
+    save_parcels(config.parcels_path, parcels)
+    return trim_telegram_text(("\n\n" + ("-" * 24) + "\n\n").join(responses))
+
+
+def handle_parcel_remove_command(config: Config, args: list[str]) -> str:
+    if not args:
+        return "사용법: /parcelremove <ID|운송장번호>"
+    selector = args[0]
+    parcels = load_parcels(config.parcels_path)
+    selected = select_parcel_records(parcels, selector)
+    if not selected:
+        return f"해당 택배를 찾지 못했습니다: {selector}"
+    selected_ids = {str(item.get("id")) for item in selected}
+    remaining = [item for item in parcels if str(item.get("id")) not in selected_ids]
+    save_parcels(config.parcels_path, remaining)
+    return "택배 삭제 완료\n" + "\n".join(sorted(selected_ids))
+
+
+def handle_parcel_active_command(config: Config, args: list[str], active: bool) -> str:
+    if not args:
+        return "사용법: /parcelpause <ID|운송장번호> 또는 /parcelresume <ID|운송장번호>"
+    selector = args[0]
+    parcels = load_parcels(config.parcels_path)
+    selected = select_parcel_records(parcels, selector)
+    if not selected:
+        return f"해당 택배를 찾지 못했습니다: {selector}"
+    for record in selected:
+        record["active"] = active
+    save_parcels(config.parcels_path, parcels)
+    action = "재개" if active else "일시정지"
+    return f"택배 {action} 완료\n" + "\n".join(str(item.get("id")) for item in selected)
+
+
 def command_help() -> str:
     return """명령어
 /status
@@ -1482,6 +2029,12 @@ Messages 전달을 켜거나 끕니다. 예: /messages on, /messages off
 
 /noti
 다른 앱 알림 전달을 켜거나 끕니다. 예: /noti on, /noti off
+
+/parcelon
+택배 주기 조회를 켭니다.
+
+/parceloff
+택배 주기 조회를 끕니다.
 
 /mode
 Messages 본문 모드를 바꿉니다. 예: /mode full, /mode redacted, /mode sender_only
@@ -1519,6 +2072,27 @@ Messages 본문 모드를 바꿉니다. 예: /mode full, /mode redacted, /mode s
 /brief
 주요 뉴스와 관심 종목을 함께 보여줍니다.
 
+/parceladd
+택배를 등록하고 1시간마다 변경 여부를 확인합니다. 예: /parceladd CJ대한통운 1234567890 키보드
+
+/parcels
+등록된 택배 목록을 보여줍니다.
+
+/parcelcheck
+택배를 즉시 조회합니다. 예: /parcelcheck, /parcelcheck 04:1234567890
+
+/parcelremove
+등록된 택배를 삭제합니다. 예: /parcelremove 04:1234567890
+
+/parcelpause
+특정 택배 주기 조회를 멈춥니다. 예: /parcelpause 04:1234567890
+
+/parcelresume
+멈춘 택배 주기 조회를 다시 켭니다. 예: /parcelresume 04:1234567890
+
+/parcelcarriers
+네이버 택배사 코드를 보여줍니다. 예: /parcelcarriers, /parcelcarriers cj
+
 /test
 봇 명령 루프가 살아 있는지 확인합니다.
 
@@ -1543,6 +2117,8 @@ def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
             "상태\n"
             f"Messages: {'on' if active.watch_messages else 'off'}\n"
             f"Notifications: {'on' if active.watch_notifications else 'off'}\n"
+            f"Parcels: {'on' if active.watch_parcels else 'off'}\n"
+            f"Parcel poll seconds: {int(active.parcel_poll_interval_seconds)}\n"
             f"Paused: {'yes' if paused else 'no'}\n"
             f"Muted until: {format_local_datetime(mute_until)}\n"
             f"Suppressed now: {'yes' if suppressed else 'no'}\n"
@@ -1582,6 +2158,11 @@ def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
             return f"Messages 전달: {'on' if enabled else 'off'}"
         state["runtime_watch_notifications"] = enabled
         return f"다른 앱 알림 전달: {'on' if enabled else 'off'}"
+
+    if command in {"/parcelon", "/parceloff"}:
+        enabled = command == "/parcelon"
+        state["runtime_watch_parcels"] = enabled
+        return f"택배 주기 조회: {'on' if enabled else 'off'}"
 
     if command == "/mode":
         if not args or args[0].lower() not in {"full", "redacted", "sender_only"}:
@@ -1661,6 +2242,27 @@ def handle_command(config: Config, state: dict[str, Any], text: str) -> str:
 
     if command == "/brief":
         return format_brief(config)
+
+    if command == "/parceladd":
+        return handle_parcel_add_command(config, state, args)
+
+    if command == "/parcels":
+        return format_parcels(config)
+
+    if command == "/parcelcheck":
+        return handle_parcel_check_command(config, state, args)
+
+    if command == "/parcelremove":
+        return handle_parcel_remove_command(config, args)
+
+    if command == "/parcelpause":
+        return handle_parcel_active_command(config, args, active=False)
+
+    if command == "/parcelresume":
+        return handle_parcel_active_command(config, args, active=True)
+
+    if command == "/parcelcarriers":
+        return format_parcel_carriers(" ".join(args).strip() or None)
 
     if command == "/test":
         return f"{APP_NAME} is alive on {socket.gethostname()}."
@@ -1827,6 +2429,67 @@ def forward_notifications(
     return forwarded
 
 
+def parcel_is_due(config: Config, parcel: dict[str, Any], force: bool = False) -> bool:
+    if force:
+        return True
+    if not parcel.get("active", True):
+        return False
+    if parcel.get("complete"):
+        return False
+    last_checked = parse_iso_datetime(parcel.get("last_checked_at"))
+    if not last_checked:
+        return True
+    return (dt.datetime.now(dt.timezone.utc) - last_checked).total_seconds() >= config.parcel_poll_interval_seconds
+
+
+def check_due_parcels(
+    config: Config,
+    state: dict[str, Any],
+    dry_run: bool,
+    notify: bool,
+    force: bool = False,
+) -> int:
+    if not config.watch_parcels:
+        return 0
+
+    parcels = load_parcels(config.parcels_path)
+    if not parcels:
+        return 0
+
+    checked = 0
+    changed_count = 0
+    for record in parcels:
+        if not parcel_is_due(config, record, force=force):
+            continue
+        checked += 1
+        try:
+            result = fetch_parcel_tracking(
+                config,
+                state,
+                str(record.get("carrier_code", "")),
+                str(record.get("invoice", "")),
+            )
+            changed = apply_parcel_result(record, result)
+            if changed:
+                changed_count += 1
+                message = format_parcel_tracking(record, result, title="택배 업데이트")
+                if dry_run:
+                    print(f"\n--- PARCEL {record.get('id')} ---\n{message}")
+                elif notify:
+                    send_telegram_message(config, message)
+                    record["last_notified_at"] = iso_now()
+        except Exception as exc:
+            record["last_checked_at"] = iso_now()
+            record["last_error"] = str(exc)
+            logging.warning("Parcel check failed id=%s error=%s", record.get("id"), exc)
+
+    if checked:
+        save_parcels(config.parcels_path, parcels)
+        save_state(config.state_path, state)
+        logging.info("Checked %s parcel(s), %s changed", checked, changed_count)
+    return changed_count
+
+
 def initialize_state(
     config: Config,
     message_backfill: int,
@@ -1890,6 +2553,8 @@ def run_loop(config: Config, message_backfill: int, notification_backfill: int, 
         logging.info("Watching Messages DB: %s", config.messages_db_path)
     if config.watch_notifications:
         logging.info("Watching Notification Center DB: %s", config.notification_db_path)
+    if config.watch_parcels:
+        logging.info("Watching parcels file: %s", config.parcels_path)
 
     while True:
         try:
@@ -1901,6 +2566,8 @@ def run_loop(config: Config, message_backfill: int, notification_backfill: int, 
 
             if forwarding_suppressed(state):
                 mark_sources_seen(active_config, state)
+                if active_config.watch_parcels:
+                    check_due_parcels(active_config, state, dry_run=dry_run, notify=False)
                 time.sleep(active_config.poll_interval_seconds)
                 continue
 
@@ -1915,8 +2582,14 @@ def run_loop(config: Config, message_backfill: int, notification_backfill: int, 
                 )
                 if notifications:
                     forward_notifications(active_config, notifications, state, dry_run=dry_run)
-            if not active_config.watch_messages and not active_config.watch_notifications:
-                logging.warning("Both WATCH_MESSAGES and WATCH_NOTIFICATIONS are disabled")
+            if active_config.watch_parcels:
+                check_due_parcels(active_config, state, dry_run=dry_run, notify=True)
+            if (
+                not active_config.watch_messages
+                and not active_config.watch_notifications
+                and not active_config.watch_parcels
+            ):
+                logging.warning("WATCH_MESSAGES, WATCH_NOTIFICATIONS, and WATCH_PARCELS are disabled")
             else:
                 state = load_state(active_config.state_path) or state
         except KeyboardInterrupt:
@@ -1936,16 +2609,20 @@ def run_once(config: Config, message_backfill: int, notification_backfill: int, 
     )
     message_count = 0
     notification_count = 0
+    parcel_count = 0
     if config.watch_messages:
         rows = fetch_messages_after(config, int(state.get("messages_last_rowid", 0)))
         message_count = forward_rows(config, rows, state, dry_run=dry_run)
     if config.watch_notifications:
         notifications = fetch_notifications_after(config, int(state.get("notifications_last_rec_id", 0)))
         notification_count = forward_notifications(config, notifications, state, dry_run=dry_run)
+    if config.watch_parcels:
+        parcel_count = check_due_parcels(config, state, dry_run=dry_run, notify=True, force=True)
     logging.info(
-        "Forwarded %s message(s), %s notification(s)",
+        "Forwarded %s message(s), %s notification(s), %s parcel update(s)",
         message_count,
         notification_count,
+        parcel_count,
     )
 
 

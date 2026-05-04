@@ -26,6 +26,8 @@ This is an MVP for personal automation. It is designed to be simple, inspectable
 - 선택적으로 macOS Notification Center 저장소의 다른 앱 알림도 전달
 - Telegram Bot API `sendMessage` based delivery
 - Telegram Bot API `sendMessage` 기반 전송
+- Optional parcel tracking by scraping Naver's parcel tracking web path and notifying only when a registered waybill changes
+- 네이버 택배조회 웹 경로를 스크래핑해 등록한 운송장의 상태가 바뀔 때만 Telegram으로 알림
 - LaunchAgent installer for background operation
 - LaunchAgent 설치 스크립트 제공
 - Sender, chat, service, and app bundle allowlist or denylist filters
@@ -157,6 +159,11 @@ Telegram 봇 명령은 설정된 `TELEGRAM_CHAT_ID`에서 기본 활성화됩니
 /news AI 5
 /stock AAPL 005930.KS
 /brief
+/parceladd CJ대한통운 1234567890 키보드
+/parcels
+/parcelcheck
+/parcelremove 04:1234567890
+/parcelcarriers cj
 /help
 ```
 

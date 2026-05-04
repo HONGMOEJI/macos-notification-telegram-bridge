@@ -107,6 +107,8 @@ If this is published as a public repository, do not include:
 - 메시지 본문
 - notification database dumps
 - notification database dump
+- waybill numbers and parcel tracking locations
+- 운송장 번호와 택배 배송 위치
 
 Use redacted logs when possible.
 

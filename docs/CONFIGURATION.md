@@ -56,6 +56,16 @@ Enable Notification Center polling.
 
 Notification Center 폴링을 켭니다.
 
+### `WATCH_PARCELS`
+
+Default: `1`
+
+기본값: `1`
+
+Enable periodic polling for parcels registered through Telegram bot commands.
+
+Telegram 봇 명령으로 등록한 택배의 주기 조회를 켭니다.
+
 ### `BOT_COMMANDS_ENABLED`
 
 Default: `1`
@@ -121,6 +131,20 @@ Editable JSON map from bundle ID to display name.
 
 번들 ID를 표시 이름으로 바꾸는 사용자가 수정 가능한 JSON 매핑 파일입니다.
 
+### `PARCELS_PATH`
+
+Default:
+
+기본값:
+
+```text
+~/Library/Application Support/messages-to-telegram/parcels.json
+```
+
+Editable JSON state for parcels registered with `/parceladd`.
+
+`/parceladd`로 등록한 택배 목록을 저장하는 사용자가 수정 가능한 JSON 파일입니다.
+
 ## Polling / 폴링
 
 ### `POLL_INTERVAL_SECONDS`
@@ -132,6 +156,16 @@ Default: `5`
 Seconds between polling loops.
 
 폴링 루프 간격입니다.
+
+### `PARCEL_POLL_INTERVAL_SECONDS`
+
+Default: `3600`
+
+기본값: `3600`
+
+Seconds between parcel checks. Values below 60 are clamped to 60.
+
+택배 조회 간격입니다. 60초보다 작게 설정하면 60초로 보정됩니다.
 
 ### `BATCH_LIMIT`
 
@@ -328,3 +362,35 @@ STOCK_WATCHLIST=^GSPC,^IXIC,AAPL,NVDA,005930.KS
 Symbols used by `/brief`.
 
 `/brief`에서 사용할 관심 종목입니다.
+
+## Parcel Tracking / 택배 조회
+
+### `PARCEL_PROVIDER`
+
+Default: `naver_scrape`
+
+기본값: `naver_scrape`
+
+Use Naver search's parcel tracking web path and internal JSON response.
+
+네이버 검색의 택배조회 웹 경로와 내부 JSON 응답을 사용합니다.
+
+### `NAVER_PARCEL_PASSPORT_KEY`
+
+Optional. Leave empty to let the bridge scrape the current request key from Naver search.
+
+선택값입니다. 비워두면 브리지가 네이버 검색 페이지에서 현재 요청 키를 스크래핑합니다.
+
+### `NAVER_PARCEL_SEARCH_URL`
+
+Default:
+
+기본값:
+
+```text
+https://search.naver.com/search.naver?query=%ED%83%9D%EB%B0%B0%EC%A1%B0%ED%9A%8C
+```
+
+Source page used to discover Naver's parcel request key.
+
+네이버 택배조회 요청 키를 찾는 원본 페이지입니다.
